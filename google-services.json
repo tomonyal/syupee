@@ -1,0 +1,46 @@
+{
+  "project_info": {
+    "project_number": "985140557459",
+    "project_id": "syupee-ebfaa",
+    "storage_bucket": "syupee-ebfaa.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:985140557459:android:1fc6bd05601167ec8c3f66",
+        "android_client_info": {
+          "package_name": "com.syupee.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "985140557459-52inccf12fs9321k1qp94baq9mr4jv9u.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAfPdmBYkdhGI7xno_u5sSKt54ocY_XrIs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "985140557459-52inccf12fs9321k1qp94baq9mr4jv9u.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "985140557459-78d5t9hh8j3juem2ssi4rq90i5v6cfcv.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.syupee.app"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
