@@ -78,6 +78,36 @@ export interface User {
 // サブスクリプションプラン
 export type SubscriptionPlan = 'light' | 'standard' | 'premium';
 
+// コインパッケージ
+export interface CoinPackage {
+  id: string;
+  coins: number;
+  price: number; // 円
+  label: string;
+  popular?: boolean;
+}
+
+// コイン取引履歴
+export interface CoinTransaction {
+  id: string;
+  type: 'purchase' | 'use' | 'bonus';
+  amount: number; // 増減（購入: +, 使用: -）
+  description: string;
+  createdAt: string;
+}
+
+// ランク定義
+export type UserRank = 'beginner' | 'bronze' | 'silver' | 'gold' | 'platinum' | 'diamond';
+
+export interface RankInfo {
+  key: UserRank;
+  label: string;
+  icon: string;
+  color: string;
+  minScans: number; // 月間最低スキャン数
+  description: string;
+}
+
 export interface PlanInfo {
   key: SubscriptionPlan;
   label: string;
@@ -141,4 +171,6 @@ export type RootStackParamList = {
   EditExpense: { expenseId?: string; parsedReceipt?: ParsedReceipt };
   PlanSelect: undefined;
   BudgetSetting: undefined;
+  CoinShop: undefined;
+  RankDetail: undefined;
 };

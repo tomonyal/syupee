@@ -69,6 +69,23 @@ async function initializeDatabase(database: SQLite.SQLiteDatabase): Promise<void
       is_recurring INTEGER NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS coin_transactions (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL CHECK (type IN ('purchase', 'use', 'bonus')),
+      amount INTEGER NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_coin_transactions_created ON coin_transactions(created_at);
+
+    CREATE TABLE IF NOT EXISTS usage_tracking (
+      month TEXT PRIMARY KEY,
+      ocr_count INTEGER NOT NULL DEFAULT 0,
+      chat_count INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
 }
 

@@ -11,14 +11,20 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { Card, Button } from '../components';
-import { useAuthStore } from '../store';
+import { useAuthStore, usePurchaseStore } from '../store';
 import { exportCSV, importCSV } from '../utils/csv';
 import { COLORS, SPACING, FONT_SIZE, BORDER_RADIUS, PLAN_MAP } from '../constants';
 
 export default function SettingsScreen() {
   const { user, signOut } = useAuthStore();
+  const { restore } = usePurchaseStore();
   const navigation = useNavigation<any>();
   const planInfo = user ? PLAN_MAP[user.plan] : null;
+
+  const handleRestore = async () => {
+    await restore();
+    Alert.alert('完了', '購入情報を復元しました');
+  };
 
   const handleSignOut = () => {
     Alert.alert('ログアウト', 'ログアウトしますか？', [
@@ -104,6 +110,13 @@ export default function SettingsScreen() {
           onPress={() => navigation.navigate('PlanSelect')}
           showArrow
         />
+        <SettingsRow
+          icon="refresh-outline"
+          label="購入を復元"
+          subtitle="機種変更後にサブスクを復元"
+          onPress={handleRestore}
+          showArrow
+        />
       </SettingsSection>
 
       {/* 予算設定 */}
@@ -113,6 +126,24 @@ export default function SettingsScreen() {
           label="予算を設定"
           subtitle="月ごとの予算をまとめて or カテゴリ別に設定"
           onPress={() => navigation.navigate('BudgetSetting')}
+          showArrow
+        />
+      </SettingsSection>
+
+      {/* コイン＆ランク */}
+      <SettingsSection title="🪙 コイン＆ランク">
+        <SettingsRow
+          icon="cart-outline"
+          label="コインショップ"
+          subtitle="コインを購入してレシートを読み込もう"
+          onPress={() => navigation.navigate('CoinShop')}
+          showArrow
+        />
+        <SettingsRow
+          icon="trophy-outline"
+          label="ランク"
+          subtitle="今月のスキャン数でランクアップ！"
+          onPress={() => navigation.navigate('RankDetail')}
           showArrow
         />
       </SettingsSection>

@@ -1,4 +1,4 @@
-import { CategoryInfo, PlanInfo, ExpenseCategory } from '../types';
+import { CategoryInfo, PlanInfo, ExpenseCategory, CoinPackage, RankInfo, UserRank } from '../types';
 
 // カテゴリ定義（住居を除外）
 export const CATEGORIES: CategoryInfo[] = [
@@ -56,3 +56,52 @@ export const CHAT_CONTEXT_TURNS = 5;
 
 // アドバイス用の参照月数
 export const ADVICE_MONTHS = 3;
+
+// コインパッケージ定義
+export const COIN_PACKAGES: CoinPackage[] = [
+  { id: 'coin_50', coins: 50, price: 80, label: 'おためし' },
+  { id: 'coin_100', coins: 100, price: 120, label: 'お得パック', popular: true },
+  { id: 'coin_300', coins: 300, price: 320, label: 'たっぷりパック' },
+  { id: 'coin_500', coins: 500, price: 480, label: 'メガパック' },
+  { id: 'coin_1000', coins: 1000, price: 900, label: 'プレミアムパック' },
+];
+
+// コインパッケージIDからコイン数を引くマップ
+export const COIN_PACKAGE_MAP: Record<string, CoinPackage> = Object.fromEntries(
+  COIN_PACKAGES.map((p) => [p.id, p])
+);
+
+// レシート1回あたりのコイン消費
+export const COIN_PER_SCAN = 10;
+
+// ランク定義
+export const RANKS: RankInfo[] = [
+  { key: 'beginner', label: 'ビギナー', icon: '🐣', color: '#BDBDCC', minScans: 0, description: 'はじめの一歩！' },
+  { key: 'bronze', label: 'ブロンズ', icon: '🥉', color: '#CD7F32', minScans: 5, description: '記録上手になってきた！' },
+  { key: 'silver', label: 'シルバー', icon: '🥈', color: '#C0C0C0', minScans: 15, description: '節約の達人！' },
+  { key: 'gold', label: 'ゴールド', icon: '🥇', color: '#FFD700', minScans: 30, description: '家計管理マスター！' },
+  { key: 'platinum', label: 'プラチナ', icon: '💎', color: '#7C4DFF', minScans: 60, description: 'シュッピくんの親友！' },
+  { key: 'diamond', label: 'ダイヤモンド', icon: '👑', color: '#FF6B9D', minScans: 100, description: '伝説の節約王！' },
+];
+
+export const RANK_MAP: Record<UserRank, RankInfo> = Object.fromEntries(
+  RANKS.map((r) => [r.key, r])
+) as Record<UserRank, RankInfo>;
+
+// スキャン数からランクを取得
+export function getRankFromScans(scanCount: number): RankInfo {
+  let rank = RANKS[0];
+  for (const r of RANKS) {
+    if (scanCount >= r.minScans) rank = r;
+  }
+  return rank;
+}
+
+// 次のランクまでの残りスキャン数
+export function getNextRankInfo(scanCount: number): { nextRank: RankInfo | null; remaining: number } {
+  const currentRank = getRankFromScans(scanCount);
+  const idx = RANKS.findIndex((r) => r.key === currentRank.key);
+  if (idx >= RANKS.length - 1) return { nextRank: null, remaining: 0 };
+  const nextRank = RANKS[idx + 1];
+  return { nextRank, remaining: nextRank.minScans - scanCount };
+}

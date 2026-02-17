@@ -3,6 +3,7 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AppNavigator } from './src/navigation';
 import { initFirebase, onAuthChange, refreshUser } from './src/services/firebase';
+import { initializePurchases, loginPurchaseUser } from './src/services/purchases';
 import { getDatabase } from './src/database';
 import { useAuthStore } from './src/store';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
@@ -29,6 +30,10 @@ export default function App() {
         if (firebaseUser) {
           const user = await refreshUser(firebaseUser.uid);
           setUser(user);
+
+          // RevenueCat初期化（ユーザーが認証済みの場合）
+          await initializePurchases(firebaseUser.uid);
+          await loginPurchaseUser(firebaseUser.uid);
         } else {
           setUser(null);
         }

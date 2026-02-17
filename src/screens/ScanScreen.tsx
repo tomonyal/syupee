@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -12,10 +12,10 @@ import {
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation, useIsFocused } from '@react-navigation/native';
+import { useNavigation, useIsFocused, useFocusEffect } from '@react-navigation/native';
 import { Button, Card, LoadingOverlay } from '../components';
-import { useScanStore, useExpenseStore, useAuthStore } from '../store';
-import { COLORS, SPACING, FONT_SIZE, BORDER_RADIUS, CATEGORIES, CATEGORY_MAP, PLAN_MAP } from '../constants';
+import { useScanStore, useExpenseStore, useAuthStore, useCoinStore, useUsageStore } from '../store';
+import { COLORS, SPACING, FONT_SIZE, BORDER_RADIUS, CATEGORIES, CATEGORY_MAP, PLAN_MAP, COIN_PER_SCAN } from '../constants';
 import { ExpenseCategory, ParsedReceipt } from '../types';
 
 export default function ScanScreen() {
@@ -25,6 +25,8 @@ export default function ScanScreen() {
   const isFocused = useIsFocused();
   const { user } = useAuthStore();
   const { addExpense } = useExpenseStore();
+  const { balance, canScan, useForScan, loadCoinData } = useCoinStore();
+  const { ocrUsedThisMonth, loadUsage } = useUsageStore();
   const {
     imageUri,
     parsedReceipt,
@@ -37,9 +39,48 @@ export default function ScanScreen() {
     setParsedReceipt,
   } = useScanStore();
 
-  // 使用上限チェック
+  // 画面フォーカス時に使用回数を読み込み
+  useFocusEffect(
+    useCallback(() => {
+      loadUsage();
+    }, [])
+  );
+
+  // 使用上限チェック（ローカルDB）
   const planInfo = user ? PLAN_MAP[user.plan] : null;
-  const isOverLimit = user && planInfo ? user.ocrUsedThisMonth >= planInfo.ocrLimit : false;
+  const isOverLimit = planInfo ? ocrUsedThisMonth >= planInfo.ocrLimit : false;
+
+  // コインチェック＆消費してから読み込み
+  const processWithCoinCheck = async () => {
+    if (!user) return;
+
+    // プラン上限内ならコイン不要
+    if (!isOverLimit) {
+      await processImage(user.uid);
+      return;
+    }
+
+    // 上限超過 → コインが必要
+    if (!canScan()) {
+      Alert.alert(
+        'コインが足りません',
+        `レシート読み込みには${COIN_PER_SCAN}コインが必要です。\n残高: ${balance}コイン`,
+        [
+          { text: 'キャンセル', style: 'cancel', onPress: () => reset() },
+          { text: 'コインを購入', onPress: () => { reset(); navigation.navigate('CoinShop'); } },
+        ]
+      );
+      return;
+    }
+
+    try {
+      await useForScan();
+      await processImage(user.uid);
+    } catch (e: any) {
+      Alert.alert('エラー', e.message);
+      reset();
+    }
+  };
 
   // 写真撮影
   const takePicture = async () => {
@@ -49,7 +90,7 @@ export default function ScanScreen() {
       if (photo?.uri) {
         setImageUri(photo.uri);
         if (user) {
-          await processImage(user.uid);
+          await processWithCoinCheck();
         }
       }
     } catch (err) {
@@ -67,7 +108,7 @@ export default function ScanScreen() {
     if (!result.canceled && result.assets[0]) {
       setImageUri(result.assets[0].uri);
       if (user) {
-        await processImage(user.uid);
+        await processWithCoinCheck();
       }
     }
   };

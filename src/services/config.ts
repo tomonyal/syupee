@@ -22,3 +22,8 @@ export const GEMINI_CONFIG = {
 export const GOOGLE_CONFIG = {
   webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '',
 };
+
+export const REVENUECAT_CONFIG = {
+  apiKeyIOS: process.env.EXPO_PUBLIC_REVENUECAT_API_KEY_IOS || '',
+  apiKeyAndroid: process.env.EXPO_PUBLIC_REVENUECAT_API_KEY_ANDROID || '',
+};

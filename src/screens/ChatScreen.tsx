@@ -13,7 +13,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { EmptyState } from '../components';
-import { useChatStore, useAuthStore } from '../store';
+import { useChatStore, useAuthStore, useUsageStore } from '../store';
 import { COLORS, SPACING, FONT_SIZE, BORDER_RADIUS, PLAN_MAP } from '../constants';
 import { ChatMessage } from '../types';
 
@@ -21,18 +21,19 @@ export default function ChatScreen() {
   const { messages, isLoading, error, loadMessages, sendMessage, clearChat } =
     useChatStore();
   const { user } = useAuthStore();
+  const { chatUsedThisMonth, loadUsage } = useUsageStore();
   const navigation = useNavigation<any>();
   const [inputText, setInputText] = useState('');
   const flatListRef = useRef<FlatList>(null);
 
-  // 使用上限チェック
+  // 使用上限チェック（ローカルDB）
   const planInfo = user ? PLAN_MAP[user.plan] : null;
-  const isOverLimit =
-    user && planInfo ? user.chatUsedThisMonth >= planInfo.chatLimit : false;
+  const isOverLimit = planInfo ? chatUsedThisMonth >= planInfo.chatLimit : false;
 
   useFocusEffect(
     useCallback(() => {
       loadMessages();
+      loadUsage();
     }, [])
   );
 
@@ -150,7 +151,7 @@ export default function ChatScreen() {
         </TouchableOpacity>
         {planInfo && user && (
           <Text style={styles.usageText}>
-            残り {planInfo.chatLimit - user.chatUsedThisMonth}回
+            残り {planInfo.chatLimit - chatUsedThisMonth}回
           </Text>
         )}
       </View>

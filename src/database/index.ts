@@ -18,3 +18,18 @@ export {
 } from './chat';
 export { setSetting, getSetting, deleteSetting, getAllSettings } from './settings';
 export { saveBudget, getBudget, deleteBudget } from './budget';
+export {
+  getCoinBalance,
+  addCoinTransaction,
+  purchaseCoins,
+  useCoinsForScan,
+  addBonusCoins,
+  getCoinTransactions,
+  getMonthlyScansCount,
+} from './coins';
+export {
+  getMonthlyUsage,
+  incrementLocalOCRUsage,
+  incrementLocalChatUsage,
+  resetUsage,
+} from './usage';

@@ -1,11 +1,12 @@
 import { create } from 'zustand';
-import { User, Expense, MonthlySummary, ChatMessage, MonthlyBudget, CategoryBudget } from '../types';
+import { User, Expense, MonthlySummary, ChatMessage, MonthlyBudget, CategoryBudget, CoinTransaction, UserRank } from '../types';
 import {
   signInWithGoogle,
   signOut as firebaseSignOut,
   refreshUser,
   incrementOCRUsage,
   incrementChatUsage,
+  updatePlan,
 } from '../services/firebase';
 import {
   getRecentExpenses,
@@ -22,10 +23,37 @@ import {
   clearChatHistory,
 } from '../database/chat';
 import { saveBudget, getBudget } from '../database/budget';
+import {
+  getCoinBalance,
+  purchaseCoins,
+  useCoinsForScan,
+  addBonusCoins,
+  getCoinTransactions,
+  getMonthlyScansCount,
+} from '../database/coins';
+import {
+  getMonthlyUsage,
+  incrementLocalOCRUsage,
+  incrementLocalChatUsage,
+} from '../database/usage';
+import {
+  initializePurchases,
+  isPurchasesAvailable,
+  loginPurchaseUser,
+  logoutPurchaseUser,
+  getOfferings,
+  purchaseCoinPackage,
+  purchasePlanSubscription,
+  getCurrentPlan,
+  getPlanFromCustomerInfo,
+  restorePurchases,
+  CoinOffering,
+  PlanOffering,
+} from '../services/purchases';
 import { recognizeReceipt } from '../services/ocr';
 import { parseReceiptText, getAIChatResponse, allocateBudgetByAI } from '../services/openai';
-import { PLAN_MAP } from '../constants';
-import { OCRResult, ParsedReceipt, ExpenseCategory } from '../types';
+import { PLAN_MAP, COIN_PER_SCAN, COIN_PACKAGES, getRankFromScans } from '../constants';
+import { OCRResult, ParsedReceipt, ExpenseCategory, RankInfo } from '../types';
 
 // ============================
 // Auth Store
@@ -50,6 +78,18 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const user = await signInWithGoogle();
       set({ user, isAuthenticated: true, isLoading: false });
+
+      // RevenueCat初期化 & ユーザー紐づけ
+      await initializePurchases(user.uid);
+      await loginPurchaseUser(user.uid);
+
+      // ストアのサブスク状態を反映
+      if (isPurchasesAvailable()) {
+        const plan = await getCurrentPlan();
+        if (plan !== user.plan) {
+          set({ user: { ...user, plan } });
+        }
+      }
     } catch (error) {
       set({ isLoading: false });
       throw error;
@@ -59,6 +99,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   signOut: async () => {
     set({ isLoading: true });
     try {
+      await logoutPurchaseUser();
       await firebaseSignOut();
       set({ user: null, isAuthenticated: false, isLoading: false });
     } catch (error) {
@@ -168,6 +209,57 @@ export const useExpenseStore = create<ExpenseState>((set, get) => ({
 }));
 
 // ============================
+// Usage Store（ローカルDB使用回数管理）
+// ============================
+interface UsageState {
+  ocrUsedThisMonth: number;
+  chatUsedThisMonth: number;
+  isLoading: boolean;
+
+  loadUsage: () => Promise<void>;
+  incrementOCR: () => Promise<void>;
+  incrementChat: () => Promise<void>;
+}
+
+export const useUsageStore = create<UsageState>((set) => ({
+  ocrUsedThisMonth: 0,
+  chatUsedThisMonth: 0,
+  isLoading: false,
+
+  loadUsage: async () => {
+    set({ isLoading: true });
+    try {
+      const usage = await getMonthlyUsage();
+      set({
+        ocrUsedThisMonth: usage.ocrCount,
+        chatUsedThisMonth: usage.chatCount,
+        isLoading: false,
+      });
+    } catch {
+      set({ isLoading: false });
+    }
+  },
+
+  incrementOCR: async () => {
+    try {
+      const newCount = await incrementLocalOCRUsage();
+      set({ ocrUsedThisMonth: newCount });
+    } catch {
+      // エラーは無視
+    }
+  },
+
+  incrementChat: async () => {
+    try {
+      const newCount = await incrementLocalChatUsage();
+      set({ chatUsedThisMonth: newCount });
+    } catch {
+      // エラーは無視
+    }
+  },
+}));
+
+// ============================
 // Scan Store
 // ============================
 interface ScanState {
@@ -208,7 +300,8 @@ export const useScanStore = create<ScanState>((set, get) => ({
       const parsed = await parseReceiptText(ocrResult.rawText);
       set({ parsedReceipt: parsed, step: 'confirm', isProcessing: false });
 
-      // 使用回数加算
+      // 使用回数加算（ローカルDB + Firebase）
+      await useUsageStore.getState().incrementOCR();
       await incrementOCRUsage(uid);
     } catch (error: any) {
       set({
@@ -279,7 +372,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         isLoading: false,
       }));
 
-      // 使用回数加算
+      // 使用回数加算（ローカルDB + Firebase）
+      await useUsageStore.getState().incrementChat();
       await incrementChatUsage(uid);
     } catch (error: any) {
       set({
@@ -357,6 +451,213 @@ export const useBudgetStore = create<BudgetState>((set, get) => ({
     } catch (error: any) {
       set({ isAllocating: false, error: error.message || '予算の配分に失敗しました' });
       throw error;
+    }
+  },
+}));
+
+// ============================
+// Coin Store
+// ============================
+interface CoinState {
+  balance: number;
+  transactions: CoinTransaction[];
+  monthlyScans: number;
+  rank: RankInfo;
+  isLoading: boolean;
+  error: string | null;
+
+  loadCoinData: () => Promise<void>;
+  purchase: (coins: number, price: number) => Promise<void>;
+  useForScan: () => Promise<void>;
+  addBonus: (amount: number, reason: string) => Promise<void>;
+  canScan: () => boolean;
+}
+
+export const useCoinStore = create<CoinState>((set, get) => ({
+  balance: 0,
+  transactions: [],
+  monthlyScans: 0,
+  rank: getRankFromScans(0),
+  isLoading: false,
+  error: null,
+
+  loadCoinData: async () => {
+    set({ isLoading: true });
+    try {
+      const [balance, transactions, monthlyScans] = await Promise.all([
+        getCoinBalance(),
+        getCoinTransactions(50),
+        getMonthlyScansCount(),
+      ]);
+      set({
+        balance,
+        transactions,
+        monthlyScans,
+        rank: getRankFromScans(monthlyScans),
+        isLoading: false,
+      });
+    } catch (error) {
+      set({ isLoading: false, error: 'コインデータの読み込みに失敗しました' });
+    }
+  },
+
+  purchase: async (coins, price) => {
+    set({ isLoading: true, error: null });
+    try {
+      await purchaseCoins(coins, price);
+      await get().loadCoinData();
+    } catch (error: any) {
+      set({ isLoading: false, error: error.message });
+      throw error;
+    }
+  },
+
+  useForScan: async () => {
+    const { balance } = get();
+    if (balance < COIN_PER_SCAN) {
+      throw new Error(`コインが足りません（必要: ${COIN_PER_SCAN}コイン、残高: ${balance}コイン）`);
+    }
+    try {
+      await useCoinsForScan(COIN_PER_SCAN);
+      await get().loadCoinData();
+    } catch (error: any) {
+      throw error;
+    }
+  },
+
+  addBonus: async (amount, reason) => {
+    try {
+      await addBonusCoins(amount, reason);
+      await get().loadCoinData();
+    } catch (error: any) {
+      set({ error: error.message });
+    }
+  },
+
+  canScan: () => {
+    return get().balance >= COIN_PER_SCAN;
+  },
+}));
+
+// ============================
+// Purchase Store（IAP管理）
+// ============================
+interface PurchaseState {
+  coinOfferings: CoinOffering[];
+  planOfferings: PlanOffering[];
+  isLoadingOfferings: boolean;
+  isPurchasing: boolean;
+  error: string | null;
+
+  loadOfferings: () => Promise<void>;
+  buyCoinPackage: (offering: CoinOffering) => Promise<boolean>;
+  buyPlanSubscription: (offering: PlanOffering) => Promise<boolean>;
+  restore: () => Promise<void>;
+}
+
+export const usePurchaseStore = create<PurchaseState>((set, get) => ({
+  coinOfferings: [],
+  planOfferings: [],
+  isLoadingOfferings: false,
+  isPurchasing: false,
+  error: null,
+
+  loadOfferings: async () => {
+    if (!isPurchasesAvailable()) return;
+    set({ isLoadingOfferings: true, error: null });
+    try {
+      const result = await getOfferings();
+      if (result) {
+        set({
+          coinOfferings: result.coinPackages,
+          planOfferings: result.planPackages,
+          isLoadingOfferings: false,
+        });
+      } else {
+        set({ isLoadingOfferings: false });
+      }
+    } catch (error: any) {
+      set({ isLoadingOfferings: false, error: error.message });
+    }
+  },
+
+  buyCoinPackage: async (offering) => {
+    set({ isPurchasing: true, error: null });
+    try {
+      const result = await purchaseCoinPackage(offering);
+
+      if (result.cancelled) {
+        set({ isPurchasing: false });
+        return false;
+      }
+
+      if (!result.success) {
+        set({ isPurchasing: false, error: result.error });
+        return false;
+      }
+
+      // 決済成功 → パッケージIDからコイン数を特定してローカルDBに付与
+      const coinPkg = COIN_PACKAGES.find((p) =>
+        offering.packageId === p.id
+      );
+      if (coinPkg) {
+        await purchaseCoins(coinPkg.coins, offering.price);
+        await useCoinStore.getState().loadCoinData();
+      }
+
+      set({ isPurchasing: false });
+      return true;
+    } catch (error: any) {
+      set({ isPurchasing: false, error: error.message });
+      return false;
+    }
+  },
+
+  buyPlanSubscription: async (offering) => {
+    set({ isPurchasing: true, error: null });
+    try {
+      const result = await purchasePlanSubscription(offering);
+
+      if (result.cancelled) {
+        set({ isPurchasing: false });
+        return false;
+      }
+
+      if (!result.success) {
+        set({ isPurchasing: false, error: result.error });
+        return false;
+      }
+
+      // 決済成功 → CustomerInfoからプランを判定してユーザー情報を更新
+      if (result.customerInfo) {
+        const newPlan = getPlanFromCustomerInfo(result.customerInfo);
+        const user = useAuthStore.getState().user;
+        if (user) {
+          useAuthStore.getState().setUser({ ...user, plan: newPlan });
+          await updatePlan(user.uid, newPlan);
+        }
+      }
+
+      set({ isPurchasing: false });
+      return true;
+    } catch (error: any) {
+      set({ isPurchasing: false, error: error.message });
+      return false;
+    }
+  },
+
+  restore: async () => {
+    set({ isPurchasing: true, error: null });
+    try {
+      const { plan } = await restorePurchases();
+      const user = useAuthStore.getState().user;
+      if (user && plan !== user.plan) {
+        useAuthStore.getState().setUser({ ...user, plan });
+        await updatePlan(user.uid, plan);
+      }
+      set({ isPurchasing: false });
+    } catch (error: any) {
+      set({ isPurchasing: false, error: error.message });
     }
   },
 }));

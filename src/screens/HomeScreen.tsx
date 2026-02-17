@@ -13,8 +13,8 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { PieChart } from 'react-native-chart-kit';
 import { Ionicons } from '@expo/vector-icons';
 import { Card, ExpenseItemCard, EmptyState, MonthSelector, BudgetProgress } from '../components';
-import { useExpenseStore, useAuthStore, useBudgetStore } from '../store';
-import { COLORS, SPACING, FONT_SIZE, BORDER_RADIUS, CATEGORY_MAP } from '../constants';
+import { useExpenseStore, useAuthStore, useBudgetStore, useCoinStore, useUsageStore } from '../store';
+import { COLORS, SPACING, FONT_SIZE, BORDER_RADIUS, CATEGORY_MAP, COIN_PER_SCAN, getNextRankInfo } from '../constants';
 import { PLAN_MAP } from '../constants';
 import { getDailyAdvice } from '../services/openai';
 
@@ -32,6 +32,8 @@ export default function HomeScreen() {
 
   const { user } = useAuthStore();
   const { budget, loadBudget } = useBudgetStore();
+  const { balance, monthlyScans, rank, loadCoinData } = useCoinStore();
+  const { ocrUsedThisMonth, chatUsedThisMonth, loadUsage } = useUsageStore();
   const navigation = useNavigation<any>();
   const [refreshing, setRefreshing] = React.useState(false);
   const [dailyAdvice, setDailyAdvice] = useState<string | null>(null);
@@ -55,12 +57,14 @@ export default function HomeScreen() {
       loadMonthlySummary();
       loadBudget();
       loadAdvice();
+      loadCoinData();
+      loadUsage();
     }, [])
   );
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([loadRecentExpenses(), loadMonthlySummary(), loadAdvice()]);
+    await Promise.all([loadRecentExpenses(), loadMonthlySummary(), loadAdvice(), loadUsage()]);
     setRefreshing(false);
   };
 
@@ -106,6 +110,29 @@ export default function HomeScreen() {
         </Card>
       </TouchableOpacity>
 
+      {/* コイン＆ランク */}
+      <View style={styles.coinRankRow}>
+        <TouchableOpacity
+          style={styles.coinCard}
+          activeOpacity={0.7}
+          onPress={() => navigation.navigate('CoinShop')}
+        >
+          <Text style={styles.coinCardIcon}>🪙</Text>
+          <Text style={styles.coinCardBalance}>{balance}</Text>
+          <Text style={styles.coinCardLabel}>コイン</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.rankCard, { borderColor: rank.color }]}
+          activeOpacity={0.7}
+          onPress={() => navigation.navigate('RankDetail')}
+        >
+          <Text style={styles.rankCardIcon}>{rank.icon}</Text>
+          <Text style={[styles.rankCardLabel, { color: rank.color }]}>{rank.label}</Text>
+          <Text style={styles.rankCardScans}>今月 {monthlyScans}回</Text>
+        </TouchableOpacity>
+      </View>
+
       {/* 今日のアドバイス */}
       {(adviceLoading || dailyAdvice) && (
         <Card style={styles.adviceCard}>
@@ -139,14 +166,14 @@ export default function HomeScreen() {
           <View style={styles.usageRow}>
             <Text style={styles.usageLabel}>OCR撮影</Text>
             <Text style={styles.usageValue}>
-              {user.ocrUsedThisMonth} / {planInfo.ocrLimit}回
+              {ocrUsedThisMonth} / {planInfo.ocrLimit}回
             </Text>
             <View style={styles.usageBar}>
               <View
                 style={[
                   styles.usageBarFill,
                   {
-                    width: `${Math.min((user.ocrUsedThisMonth / planInfo.ocrLimit) * 100, 100)}%`,
+                    width: `${Math.min((ocrUsedThisMonth / planInfo.ocrLimit) * 100, 100)}%`,
                     backgroundColor: COLORS.primary,
                   },
                 ]}
@@ -156,14 +183,14 @@ export default function HomeScreen() {
           <View style={styles.usageRow}>
             <Text style={styles.usageLabel}>AI相談</Text>
             <Text style={styles.usageValue}>
-              {user.chatUsedThisMonth} / {planInfo.chatLimit}回
+              {chatUsedThisMonth} / {planInfo.chatLimit}回
             </Text>
             <View style={styles.usageBar}>
               <View
                 style={[
                   styles.usageBarFill,
                   {
-                    width: `${Math.min((user.chatUsedThisMonth / planInfo.chatLimit) * 100, 100)}%`,
+                    width: `${Math.min((chatUsedThisMonth / planInfo.chatLimit) * 100, 100)}%`,
                     backgroundColor: COLORS.secondary,
                   },
                 ]}
@@ -245,6 +272,53 @@ const styles = StyleSheet.create({
   summaryCount: {
     fontSize: FONT_SIZE.sm,
     color: 'rgba(255,255,255,0.7)',
+  },
+  coinRankRow: {
+    flexDirection: 'row',
+    gap: SPACING.sm,
+    marginBottom: SPACING.md,
+  },
+  coinCard: {
+    flex: 1,
+    backgroundColor: COLORS.surface,
+    borderRadius: BORDER_RADIUS.md,
+    padding: SPACING.md,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  coinCardIcon: {
+    fontSize: 28,
+  },
+  coinCardBalance: {
+    fontSize: FONT_SIZE.xxl,
+    fontWeight: '900',
+    color: COLORS.text,
+  },
+  coinCardLabel: {
+    fontSize: FONT_SIZE.xs,
+    color: COLORS.textSecondary,
+    fontWeight: '600',
+  },
+  rankCard: {
+    flex: 1,
+    backgroundColor: COLORS.surface,
+    borderRadius: BORDER_RADIUS.md,
+    padding: SPACING.md,
+    alignItems: 'center',
+    borderWidth: 2,
+  },
+  rankCardIcon: {
+    fontSize: 28,
+  },
+  rankCardLabel: {
+    fontSize: FONT_SIZE.lg,
+    fontWeight: '800',
+  },
+  rankCardScans: {
+    fontSize: FONT_SIZE.xs,
+    color: COLORS.textSecondary,
+    fontWeight: '600',
   },
   adviceCard: {
     marginBottom: SPACING.md,

@@ -19,6 +19,8 @@ import ExpenseDetailScreen from '../screens/ExpenseDetailScreen';
 import EditExpenseScreen from '../screens/EditExpenseScreen';
 import PlanSelectScreen from '../screens/PlanSelectScreen';
 import BudgetSettingScreen from '../screens/BudgetSettingScreen';
+import CoinShopScreen from '../screens/CoinShopScreen';
+import RankDetailScreen from '../screens/RankDetailScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<RootTabParamList>();
@@ -191,6 +193,16 @@ export default function AppNavigator() {
               name="BudgetSetting"
               component={BudgetSettingScreen}
               options={{ title: '予算設定' }}
+            />
+            <Stack.Screen
+              name="CoinShop"
+              component={CoinShopScreen}
+              options={{ title: 'コインショップ' }}
+            />
+            <Stack.Screen
+              name="RankDetail"
+              component={RankDetailScreen}
+              options={{ title: 'ランク' }}
             />
           </>
         )}
