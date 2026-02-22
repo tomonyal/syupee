@@ -35,6 +35,7 @@ async function initializeDatabase(database: SQLite.SQLiteDatabase): Promise<void
       name TEXT NOT NULL,
       price REAL NOT NULL,
       quantity INTEGER NOT NULL DEFAULT 1,
+      category TEXT,
       FOREIGN KEY (expense_id) REFERENCES expenses(id) ON DELETE CASCADE
     );
 
@@ -86,6 +87,21 @@ async function initializeDatabase(database: SQLite.SQLiteDatabase): Promise<void
       chat_count INTEGER NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS ocr_quota_purchases (
+      id TEXT PRIMARY KEY,
+      quota_count INTEGER NOT NULL,
+      coin_cost INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS ocr_quota_balance (
+      month TEXT PRIMARY KEY,
+      quota_remaining INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ocr_quota_purchases_created ON ocr_quota_purchases(created_at);
   `);
 }
 
@@ -107,5 +123,74 @@ async function migrateDatabase(database: SQLite.SQLiteDatabase): Promise<void> {
     );
   } catch {
     // カラムが既に存在する場合はエラーになるので無視
+  }
+
+  try {
+    // expense_items に category カラムを追加（既にあれば無視）
+    await database.execAsync(
+      `ALTER TABLE expense_items ADD COLUMN category TEXT`
+    );
+  } catch {
+    // カラムが既に存在する場合はエラーになるので無視
+  }
+
+  try {
+    // AI相談枠の購入履歴テーブルと残高テーブルを追加
+    await database.execAsync(`
+      CREATE TABLE IF NOT EXISTS chat_quota_purchases (
+        id TEXT PRIMARY KEY,
+        quota_count INTEGER NOT NULL,
+        coin_cost INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS chat_quota_balance (
+        month TEXT PRIMARY KEY,
+        quota_remaining INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_chat_quota_purchases_created ON chat_quota_purchases(created_at);
+    `);
+  } catch {
+    // テーブルが既に存在する場合はエラーになるので無視
+  }
+
+  try {
+    // 月次ランク履歴テーブルを追加
+    await database.execAsync(`
+      CREATE TABLE IF NOT EXISTS monthly_rank_history (
+        id TEXT PRIMARY KEY,
+        month TEXT NOT NULL,
+        rank TEXT NOT NULL,
+        scan_count INTEGER NOT NULL,
+        reward_coins INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_monthly_rank_history_month ON monthly_rank_history(month);
+    `);
+  } catch {
+    // テーブルが既に存在する場合はエラーになるので無視
+  }
+
+  try {
+    // シーズンランク履歴テーブルを追加
+    await database.execAsync(`
+      CREATE TABLE IF NOT EXISTS season_rank_history (
+        id TEXT PRIMARY KEY,
+        season_id TEXT NOT NULL,
+        rank TEXT NOT NULL,
+        scan_count INTEGER NOT NULL,
+        percentile INTEGER NOT NULL,
+        total_users INTEGER NOT NULL,
+        reward_coins INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_season_rank_history_season ON season_rank_history(season_id);
+    `);
+  } catch {
+    // テーブルが既に存在する場合はエラーになるので無視
   }
 }

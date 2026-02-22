@@ -17,6 +17,7 @@ import { Button, Card, LoadingOverlay } from '../components';
 import { useScanStore, useExpenseStore, useAuthStore, useCoinStore, useUsageStore } from '../store';
 import { COLORS, SPACING, FONT_SIZE, BORDER_RADIUS, CATEGORIES, CATEGORY_MAP, PLAN_MAP, COIN_PER_SCAN } from '../constants';
 import { ExpenseCategory, ParsedReceipt } from '../types';
+import { useOCRQuota } from '../database/quota';
 
 export default function ScanScreen() {
   const [permission, requestPermission] = useCameraPermissions();
@@ -25,7 +26,7 @@ export default function ScanScreen() {
   const isFocused = useIsFocused();
   const { user } = useAuthStore();
   const { addExpense } = useExpenseStore();
-  const { balance, canScan, useForScan, loadCoinData } = useCoinStore();
+  const { balance, ocrQuotaBalance, canScan, useForScan, loadCoinData } = useCoinStore();
   const { ocrUsedThisMonth, loadUsage } = useUsageStore();
   const {
     imageUri,
@@ -54,20 +55,36 @@ export default function ScanScreen() {
   const processWithCoinCheck = async () => {
     if (!user) return;
 
-    // プラン上限内ならコイン不要
+    // プラン上限内ならコイン・枠不要
     if (!isOverLimit) {
       await processImage(user.uid);
       return;
     }
 
-    // 上限超過 → コインが必要
+    // 上限超過 → OCR枠をチェック
+    if (ocrQuotaBalance > 0) {
+      try {
+        const success = await useOCRQuota();
+        if (success) {
+          await loadCoinData(); // 枠残高を更新
+          await processImage(user.uid);
+          return;
+        }
+      } catch (e: any) {
+        Alert.alert('エラー', e.message);
+        reset();
+        return;
+      }
+    }
+
+    // OCR枠もない → コインが必要
     if (!canScan()) {
       Alert.alert(
-        'コインが足りません',
-        `レシート読み込みには${COIN_PER_SCAN}コインが必要です。\n残高: ${balance}コイン`,
+        'コインまたは枠が足りません',
+        `レシート読み込みには${COIN_PER_SCAN}コインか、OCR枠が必要です。\n\nコイン残高: ${balance}\nOCR枠: ${ocrQuotaBalance}`,
         [
           { text: 'キャンセル', style: 'cancel', onPress: () => reset() },
-          { text: 'コインを購入', onPress: () => { reset(); navigation.navigate('CoinShop'); } },
+          { text: 'ショップへ', onPress: () => { reset(); navigation.navigate('CoinShop'); } },
         ]
       );
       return;
@@ -123,7 +140,10 @@ export default function ScanScreen() {
         category: parsedReceipt.suggestedCategory,
         storeName: parsedReceipt.storeName,
         date: parsedReceipt.date,
-        items: parsedReceipt.items,
+        items: parsedReceipt.items.map((item) => ({
+          ...item,
+          category: item.category ?? parsedReceipt.suggestedCategory,
+        })),
         memo: '',
         receiptImageUri: imageUri || undefined,
       });
@@ -253,6 +273,7 @@ function ConfirmScreen({
   const [totalAmount, setTotalAmount] = useState(String(receipt.totalAmount));
   const [category, setCategory] = useState(receipt.suggestedCategory);
   const [date, setDate] = useState(receipt.date);
+  const [items, setItems] = useState(receipt.items);
 
   const handleUpdate = () => {
     onEdit({
@@ -261,8 +282,15 @@ function ConfirmScreen({
       totalAmount: Number(totalAmount) || 0,
       suggestedCategory: category,
       date,
+      items,
     });
     setEditing(false);
+  };
+
+  const updateItemCategory = (index: number, newCategory: ExpenseCategory) => {
+    const newItems = [...items];
+    newItems[index] = { ...newItems[index], category: newCategory };
+    setItems(newItems);
   };
 
   return (
@@ -336,17 +364,52 @@ function ConfirmScreen({
         </View>
 
         {/* 明細 */}
-        {receipt.items.length > 0 && (
+        {items.length > 0 && (
           <View style={styles.itemsSection}>
             <Text style={styles.itemsSectionTitle}>明細</Text>
-            {receipt.items.map((item, idx) => (
-              <View key={idx} style={styles.itemRow}>
-                <Text style={styles.itemName} numberOfLines={1}>
-                  {item.name}
-                </Text>
-                <Text style={styles.itemPrice}>
-                  ¥{item.price.toLocaleString()} ×{item.quantity}
-                </Text>
+            {items.map((item, idx) => (
+              <View key={idx} style={styles.itemRowContainer}>
+                <View style={styles.itemRow}>
+                  <View style={styles.itemNameAndCategory}>
+                    <Text style={styles.itemName} numberOfLines={1}>
+                      {item.name}
+                    </Text>
+                    {editing ? (
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.itemCategoryScroll}>
+                        <View style={styles.itemCategoryChips}>
+                          {CATEGORIES.map((cat) => (
+                            <TouchableOpacity
+                              key={cat.key}
+                              style={[
+                                styles.itemCategoryChip,
+                                item.category === cat.key && { backgroundColor: cat.color },
+                              ]}
+                              onPress={() => updateItemCategory(idx, cat.key)}
+                            >
+                              <Text
+                                style={[
+                                  styles.itemCategoryChipText,
+                                  item.category === cat.key && { color: '#FFF' },
+                                ]}
+                              >
+                                {cat.label}
+                              </Text>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      </ScrollView>
+                    ) : (
+                      <View style={[styles.itemCategoryTag, { backgroundColor: CATEGORY_MAP[item.category || 'other']?.color + '20' }]}>
+                        <Text style={[styles.itemCategoryTagText, { color: CATEGORY_MAP[item.category || 'other']?.color }]}>
+                          {CATEGORY_MAP[item.category || 'other']?.label || 'その他'}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                  <Text style={styles.itemPrice}>
+                    ¥{item.price.toLocaleString()} ×{item.quantity}
+                  </Text>
+                </View>
               </View>
             ))}
           </View>
@@ -619,19 +682,58 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     marginBottom: SPACING.sm,
   },
+  itemRowContainer: {
+    marginBottom: SPACING.sm,
+  },
   itemRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'flex-start',
     paddingVertical: 4,
   },
-  itemName: {
+  itemNameAndCategory: {
     flex: 1,
+    marginRight: SPACING.sm,
+  },
+  itemName: {
     fontSize: FONT_SIZE.md,
     color: COLORS.text,
+    marginBottom: 4,
   },
   itemPrice: {
     fontSize: FONT_SIZE.md,
     color: COLORS.text,
+    fontWeight: '600',
+  },
+  itemCategoryScroll: {
+    maxHeight: 40,
+  },
+  itemCategoryChips: {
+    flexDirection: 'row',
+    gap: SPACING.xs,
+    paddingVertical: 2,
+  },
+  itemCategoryChip: {
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 4,
+    borderRadius: BORDER_RADIUS.full,
+    backgroundColor: COLORS.background,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  itemCategoryChipText: {
+    fontSize: 10,
+    color: COLORS.textSecondary,
+    fontWeight: '600',
+  },
+  itemCategoryTag: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 2,
+    borderRadius: BORDER_RADIUS.full,
+  },
+  itemCategoryTagText: {
+    fontSize: 10,
     fontWeight: '600',
   },
   confirmActions: {

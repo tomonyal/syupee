@@ -9,7 +9,7 @@
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
-      "backgroundColor": "#FF6B9D"
+      "backgroundColor": "#FDD835"
     },
     "assetBundlePatterns": [
       "**/*"
@@ -26,7 +26,7 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#FF6B9D"
+        "backgroundColor": "#FDD835"
       },
       "package": "com.syupee.app",
       "googleServicesFile": "./google-services.json",
@@ -44,8 +44,7 @@
       "expo-sqlite",
       "expo-asset",
       "expo-font",
-      "@react-native-google-signin/google-signin",
-      "react-native-purchases"
+      "@react-native-google-signin/google-signin"
     ],
     "extra": {
       "eas": {

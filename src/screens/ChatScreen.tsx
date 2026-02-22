@@ -206,7 +206,7 @@ export default function ChatScreen() {
             size={20}
             color={
               inputText.trim() && !isLoading
-                ? COLORS.textOnPrimary
+                ? '#FFFFFF'
                 : COLORS.textLight
             }
           />
@@ -301,7 +301,7 @@ const styles = StyleSheet.create({
     lineHeight: 22,
   },
   userText: {
-    color: COLORS.textOnPrimary,
+    color: '#FFFFFF',
   },
   typingIndicator: {
     paddingHorizontal: SPACING.md,

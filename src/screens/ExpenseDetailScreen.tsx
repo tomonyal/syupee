@@ -117,13 +117,32 @@ export default function ExpenseDetailScreen() {
         <Card title="🧾 明細" style={styles.itemsCard}>
           {expense.items.map((item, idx) => (
             <View key={idx} style={styles.itemRow}>
-              <Text style={styles.itemName} numberOfLines={1}>
-                {item.name}
-              </Text>
-              <Text style={styles.itemQty}>×{item.quantity}</Text>
-              <Text style={styles.itemPrice}>
-                ¥{(item.price * item.quantity).toLocaleString()}
-              </Text>
+              <View style={styles.itemMain}>
+                <Text style={styles.itemName} numberOfLines={1}>
+                  {item.name}
+                </Text>
+                <View style={styles.itemMetaRow}>
+                  {item.category && (
+                    <View
+                      style={[
+                        styles.itemCategoryBadge,
+                        { backgroundColor: (CATEGORY_MAP[item.category]?.color || COLORS.border) + '20' },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.itemCategoryText,
+                          { color: CATEGORY_MAP[item.category]?.color || COLORS.textSecondary },
+                        ]}
+                      >
+                        {CATEGORY_MAP[item.category]?.label || 'その他'}
+                      </Text>
+                    </View>
+                  )}
+                  <Text style={styles.itemQty}>×{item.quantity}</Text>
+                </View>
+              </View>
+              <Text style={styles.itemPrice}>¥{(item.price * item.quantity).toLocaleString()}</Text>
             </View>
           ))}
           <View style={styles.totalRow}>
@@ -236,20 +255,37 @@ const styles = StyleSheet.create({
   },
   itemRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     paddingVertical: SPACING.sm,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.divider,
   },
-  itemName: {
+  itemMain: {
     flex: 1,
+    marginRight: SPACING.sm,
+  },
+  itemName: {
     fontSize: FONT_SIZE.md,
     color: COLORS.text,
+  },
+  itemMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+    marginTop: 4,
+  },
+  itemCategoryBadge: {
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 2,
+    borderRadius: BORDER_RADIUS.full,
+  },
+  itemCategoryText: {
+    fontSize: FONT_SIZE.xs,
+    fontWeight: '700',
   },
   itemQty: {
     fontSize: FONT_SIZE.sm,
     color: COLORS.textSecondary,
-    marginRight: SPACING.md,
   },
   itemPrice: {
     fontSize: FONT_SIZE.md,

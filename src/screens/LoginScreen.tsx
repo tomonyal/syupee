@@ -118,12 +118,12 @@ const styles = StyleSheet.create({
   appName: {
     fontSize: FONT_SIZE.xxxl,
     fontWeight: '900',
-    color: COLORS.textOnPrimary,
+    color: '#FFFFFF',
     letterSpacing: 2,
   },
   tagline: {
     fontSize: FONT_SIZE.lg,
-    color: 'rgba(255,255,255,0.9)',
+    color: 'rgba(255,255,255,0.95)',
     marginTop: SPACING.sm,
   },
   features: {

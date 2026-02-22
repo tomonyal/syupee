@@ -8,20 +8,16 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { useCoinStore } from '../store';
 import { COLORS, SPACING, FONT_SIZE, BORDER_RADIUS, RANKS, getNextRankInfo } from '../constants';
+import { getSeasonDisplayName } from '../utils';
 
 export default function RankDetailScreen() {
-  const { monthlyScans, rank, loadCoinData } = useCoinStore();
+  const { seasonScans, rank, percentile, totalUsers, currentSeason, loadCoinData } = useCoinStore();
 
   useFocusEffect(
     useCallback(() => {
       loadCoinData();
     }, [])
   );
-
-  const { nextRank, remaining } = getNextRankInfo(monthlyScans);
-  const progress = nextRank
-    ? (monthlyScans - rank.minScans) / (nextRank.minScans - rank.minScans)
-    : 1;
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
@@ -30,38 +26,31 @@ export default function RankDetailScreen() {
         <Text style={styles.currentRankIcon}>{rank.icon}</Text>
         <Text style={[styles.currentRankLabel, { color: rank.color }]}>{rank.label}</Text>
         <Text style={styles.currentRankDesc}>{rank.description}</Text>
-        <View style={styles.scanCountRow}>
-          <Text style={styles.scanCountLabel}>今月のスキャン数</Text>
-          <Text style={styles.scanCountValue}>{monthlyScans}回</Text>
-        </View>
-
-        {/* プログレスバー */}
-        {nextRank && (
-          <View style={styles.progressSection}>
-            <View style={styles.progressBar}>
-              <View
-                style={[
-                  styles.progressFill,
-                  { width: `${Math.min(progress * 100, 100)}%`, backgroundColor: rank.color },
-                ]}
-              />
-            </View>
-            <Text style={styles.progressText}>
-              次のランク「{nextRank.label}{nextRank.icon}」まで あと{remaining}回
-            </Text>
+        <View style={styles.seasonInfoCard}>
+          <Text style={styles.seasonTitle}>{getSeasonDisplayName(currentSeason)}</Text>
+          <View style={styles.scanCountRow}>
+            <Text style={styles.scanCountLabel}>今シーズンのスキャン数</Text>
+            <Text style={styles.scanCountValue}>{seasonScans}回</Text>
           </View>
-        )}
-        {!nextRank && (
-          <Text style={styles.maxRankText}>🎊 最高ランク達成！</Text>
-        )}
+          <View style={styles.scanCountRow}>
+            <Text style={styles.scanCountLabel}>順位</Text>
+            <Text style={styles.scanCountValue}>上位{percentile}%</Text>
+          </View>
+          {totalUsers > 0 && (
+            <Text style={styles.totalUsersText}>総参加者: {totalUsers}人</Text>
+          )}
+        </View>
       </View>
 
       {/* 全ランク一覧 */}
       <Text style={styles.sectionTitle}>🏅 ランク一覧</Text>
+      <Text style={styles.sectionDescription}>
+        シーズン末にランクに応じて報酬コインを獲得できます
+      </Text>
       <View style={styles.rankList}>
         {RANKS.map((r, idx) => {
           const isCurrent = r.key === rank.key;
-          const isAchieved = monthlyScans >= r.minScans;
+          const isAchieved = percentile >= r.minPercentile;
           return (
             <View
               key={r.key}
@@ -80,10 +69,15 @@ export default function RankDetailScreen() {
                     {r.label}
                   </Text>
                   <Text style={styles.rankItemDesc}>{r.description}</Text>
+                  {r.rewardCoins > 0 && (
+                    <Text style={styles.rankItemReward}>
+                      🪙 報酬: {r.rewardCoins}コイン
+                    </Text>
+                  )}
                 </View>
               </View>
               <Text style={styles.rankItemMin}>
-                {r.minScans}回〜
+                {r.minPercentile > 0 ? `上位${r.minPercentile}%〜` : '全員'}
               </Text>
             </View>
           );
@@ -94,8 +88,10 @@ export default function RankDetailScreen() {
       <View style={styles.rulesCard}>
         <Text style={styles.rulesTitle}>📖 ランクのルール</Text>
         <Text style={styles.rulesText}>
-          ・ランクは毎月の読み込み回数で決まります{'\n'}
-          ・月が変わるとスキャン数はリセットされます{'\n'}
+          ・ランクは3ヶ月（1シーズン）の読み込み回数で決まります{'\n'}
+          ・全ユーザーの中での相対順位（上位○%）で判定されます{'\n'}
+          ・シーズンが変わるとスキャン数はリセットされます{'\n'}
+          ・シーズン末に到達したランクに応じて報酬コインを獲得できます{'\n'}
           ・たくさんレシートを読み込んでランクアップ！
         </Text>
       </View>
@@ -134,11 +130,25 @@ const styles = StyleSheet.create({
     marginTop: SPACING.xs,
     marginBottom: SPACING.md,
   },
+  seasonInfoCard: {
+    backgroundColor: COLORS.background,
+    borderRadius: BORDER_RADIUS.md,
+    padding: SPACING.md,
+    width: '100%',
+    marginBottom: SPACING.sm,
+  },
+  seasonTitle: {
+    fontSize: FONT_SIZE.md,
+    fontWeight: '700',
+    color: COLORS.text,
+    textAlign: 'center',
+    marginBottom: SPACING.sm,
+  },
   scanCountRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: SPACING.sm,
-    marginBottom: SPACING.md,
+    justifyContent: 'space-between',
+    marginBottom: SPACING.xs,
   },
   scanCountLabel: {
     fontSize: FONT_SIZE.md,
@@ -149,6 +159,12 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZE.xl,
     fontWeight: '900',
     color: COLORS.text,
+  },
+  totalUsersText: {
+    fontSize: FONT_SIZE.xs,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
+    marginTop: SPACING.xs,
   },
   progressSection: {
     width: '100%',
@@ -180,6 +196,11 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZE.xl,
     fontWeight: '800',
     color: COLORS.text,
+    marginBottom: SPACING.xs,
+  },
+  sectionDescription: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.textSecondary,
     marginBottom: SPACING.md,
   },
   rankList: {
@@ -219,6 +240,12 @@ const styles = StyleSheet.create({
   rankItemDesc: {
     fontSize: FONT_SIZE.sm,
     color: COLORS.textSecondary,
+    marginTop: 2,
+  },
+  rankItemReward: {
+    fontSize: FONT_SIZE.xs,
+    color: COLORS.accent,
+    fontWeight: '700',
     marginTop: 2,
   },
   rankItemMin: {

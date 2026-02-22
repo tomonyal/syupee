@@ -22,8 +22,8 @@ export async function insertExpense(
   // 明細を挿入
   for (const item of expense.items) {
     await db.runAsync(
-      `INSERT INTO expense_items (expense_id, name, price, quantity) VALUES (?, ?, ?, ?)`,
-      [id, item.name, item.price, item.quantity]
+      `INSERT INTO expense_items (expense_id, name, price, quantity, category) VALUES (?, ?, ?, ?, ?)`,
+      [id, item.name, item.price, item.quantity, item.category ?? expense.category]
     );
   }
 
@@ -58,11 +58,17 @@ export async function updateExpense(
 
 export async function updateExpenseItems(expenseId: string, items: ExpenseItem[]): Promise<void> {
   const db = await getDatabase();
+  const expenseRow = await db.getFirstAsync<{ category: string }>(
+    'SELECT category FROM expenses WHERE id = ?',
+    [expenseId]
+  );
+  const fallbackCategory = expenseRow?.category as ExpenseCategory | undefined;
+
   await db.runAsync('DELETE FROM expense_items WHERE expense_id = ?', [expenseId]);
   for (const item of items) {
     await db.runAsync(
-      `INSERT INTO expense_items (expense_id, name, price, quantity) VALUES (?, ?, ?, ?)`,
-      [expenseId, item.name, item.price, item.quantity]
+      `INSERT INTO expense_items (expense_id, name, price, quantity, category) VALUES (?, ?, ?, ?, ?)`,
+      [expenseId, item.name, item.price, item.quantity, item.category ?? fallbackCategory ?? 'other']
     );
   }
 }
@@ -104,8 +110,14 @@ export async function getExpenses(options?: {
     params.push(options.month);
   }
   if (options?.category) {
-    conditions.push('category = ?');
-    params.push(options.category);
+    conditions.push(`(
+      category = ?
+      OR EXISTS (
+        SELECT 1 FROM expense_items ei
+        WHERE ei.expense_id = expenses.id AND ei.category = ?
+      )
+    )`);
+    params.push(options.category, options.category);
   }
 
   if (conditions.length > 0) {
@@ -154,24 +166,44 @@ export async function getMonthlySummary(month: string): Promise<MonthlySummary> 
     [month]
   );
 
-  const breakdownRows = await db.getAllAsync<{
-    category: string;
-    amount: number;
-    count: number;
-  }>(
-    `SELECT category, SUM(amount) as amount, COUNT(*) as count
-     FROM expenses WHERE strftime('%Y-%m', date) = ?
-     GROUP BY category ORDER BY amount DESC`,
-    [month]
-  );
-
   const totalAmount = totalResult?.total ?? 0;
-  const categoryBreakdown: CategoryBreakdown[] = breakdownRows.map((row) => ({
-    category: row.category as ExpenseCategory,
-    amount: row.amount,
-    percentage: totalAmount > 0 ? (row.amount / totalAmount) * 100 : 0,
-    count: row.count,
-  }));
+  const expenses = await getExpenses({ month });
+  const breakdownMap = new Map<ExpenseCategory, { amount: number; count: number }>();
+
+  for (const expense of expenses) {
+    if (expense.items.length > 0) {
+      for (const item of expense.items) {
+        const category = (item.category ?? expense.category) as ExpenseCategory;
+        const itemAmount = (item.price || 0) * (item.quantity || 1);
+        if (itemAmount <= 0) continue;
+
+        const prev = breakdownMap.get(category) ?? { amount: 0, count: 0 };
+        breakdownMap.set(category, {
+          amount: prev.amount + itemAmount,
+          count: prev.count + 1,
+        });
+      }
+      continue;
+    }
+
+    const prev = breakdownMap.get(expense.category) ?? { amount: 0, count: 0 };
+    breakdownMap.set(expense.category, {
+      amount: prev.amount + expense.amount,
+      count: prev.count + 1,
+    });
+  }
+
+  const breakdownTotal = Array.from(breakdownMap.values()).reduce((sum, row) => sum + row.amount, 0);
+  const percentageBase = breakdownTotal > 0 ? breakdownTotal : totalAmount;
+
+  const categoryBreakdown: CategoryBreakdown[] = Array.from(breakdownMap.entries())
+    .map(([category, value]) => ({
+      category,
+      amount: value.amount,
+      percentage: percentageBase > 0 ? (value.amount / percentageBase) * 100 : 0,
+      count: value.count,
+    }))
+    .sort((a, b) => b.amount - a.amount);
 
   return {
     month,
@@ -211,6 +243,7 @@ function mapRowToExpense(row: any, itemRows: any[]): Expense {
       name: item.name,
       price: item.price,
       quantity: item.quantity,
+      category: item.category ? (item.category as ExpenseCategory) : undefined,
     })),
     createdAt: row.created_at,
     updatedAt: row.updated_at,

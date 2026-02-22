@@ -3,6 +3,10 @@ import { ParsedReceipt, ChatMessage, MonthlySummary, ExpenseCategory, CategoryBu
 import { CATEGORIES, CATEGORY_MAP, ADVICE_MONTHS } from '../constants';
 import { getMultiMonthSummary, getBudget, getSetting, setSetting } from '../database';
 
+// レート制限対策：最後のリクエスト時刻を記録
+let lastRequestTime = 0;
+const MIN_REQUEST_INTERVAL = 1000; // 最小リクエスト間隔（ミリ秒）
+
 /**
  * レシートOCRテキストをJSON構造化する
  */
@@ -15,7 +19,7 @@ export async function parseReceiptText(ocrText: string): Promise<ParsedReceipt> 
   "storeName": "店名",
   "date": "YYYY-MM-DD",
   "items": [
-    { "name": "商品名", "price": 数値, "quantity": 数値 }
+    { "name": "商品名", "price": 数値, "quantity": 数値, "category": "カテゴリキー" }
   ],
   "totalAmount": 合計金額(数値),
   "suggestedCategory": "カテゴリキー"
@@ -28,6 +32,8 @@ export async function parseReceiptText(ocrText: string): Promise<ParsedReceipt> 
 - 店名不明なら"不明"
 - 金額は数値のみ（円記号なし）
 - 小計・税込合計があれば税込金額を使う
+- **重要**: すべての明細（items）に必ず最適なcategoryを個別に割り当ててください。商品名から判断し、食品なら"food"、洗剤なら"daily_necessities"など、1つずつ適切なカテゴリキーを設定すること
+- suggestedCategoryはレシート全体の主要カテゴリを設定
 - 合計金額は明細の合計と整合性を取る`;
 
   const response = await callGemini(systemPrompt, ocrText);
@@ -38,6 +44,7 @@ export async function parseReceiptText(ocrText: string): Promise<ParsedReceipt> 
     if (!jsonMatch) throw new Error('JSONが見つかりません');
 
     const parsed = JSON.parse(jsonMatch[0]);
+    const suggestedCategory = validateCategory(parsed.suggestedCategory);
 
     return {
       storeName: parsed.storeName || '不明',
@@ -46,9 +53,10 @@ export async function parseReceiptText(ocrText: string): Promise<ParsedReceipt> 
         name: item.name || '',
         price: Number(item.price) || 0,
         quantity: Number(item.quantity) || 1,
+        category: validateCategory(item.category || suggestedCategory),
       })),
       totalAmount: Number(parsed.totalAmount) || 0,
-      suggestedCategory: validateCategory(parsed.suggestedCategory),
+      suggestedCategory,
     };
   } catch (error) {
     throw new Error('レシートの解析に失敗しました。再度撮影してください。');
@@ -262,51 +270,113 @@ ${budgetContext}
 }
 async function callGemini(
   systemInstruction: string,
-  userMessage: string
+  userMessage: string,
+  retryCount = 0
 ): Promise<string> {
   const { apiKey, model } = GEMINI_CONFIG;
+  const MAX_RETRIES = 3;
+  const BASE_DELAY = 2000; // 2秒
 
   if (!apiKey) {
     throw new Error('Gemini APIキーが設定されていません');
   }
 
+  // レート制限対策：前回のリクエストから最小間隔が経過するまで待機
+  const now = Date.now();
+  const timeSinceLastRequest = now - lastRequestTime;
+  if (timeSinceLastRequest < MIN_REQUEST_INTERVAL) {
+    await sleep(MIN_REQUEST_INTERVAL - timeSinceLastRequest);
+  }
+  lastRequestTime = Date.now();
+
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      system_instruction: {
-        parts: [{ text: systemInstruction }],
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
       },
-      contents: [
-        {
-          role: 'user',
-          parts: [{ text: userMessage }],
+      body: JSON.stringify({
+        system_instruction: {
+          parts: [{ text: systemInstruction }],
         },
-      ],
-      generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 1000,
-      },
-    }),
-  });
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: userMessage }],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 1000,
+        },
+      }),
+    });
 
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Gemini APIエラー: ${response.status} - ${error}`);
+    if (!response.ok) {
+      const errorText = await response.text();
+      let errorMessage = '';
+      
+      try {
+        const errorJson = JSON.parse(errorText);
+        const errorDetails = errorJson.error?.message || errorText;
+        
+        // RESOURCE_EXHAUSTEDエラーの詳細チェック
+        if (errorDetails.includes('RESOURCE_EXHAUSTED') || errorDetails.includes('quota')) {
+          errorMessage = 'AIサーバーが混雑しています。しばらく時間をおいてから再度お試しください🙏';
+        }
+      } catch {
+        errorMessage = errorText;
+      }
+      
+      // 429エラー（レート制限）の場合、リトライ
+      if (response.status === 429) {
+        if (retryCount < MAX_RETRIES) {
+          const delay = BASE_DELAY * Math.pow(2, retryCount); // エクスポネンシャルバックオフ
+          console.log(`レート制限エラー。${delay}ms後にリトライします (${retryCount + 1}/${MAX_RETRIES})`);
+          await sleep(delay);
+          return callGemini(systemInstruction, userMessage, retryCount + 1);
+        }
+        throw new Error(errorMessage || 'AIサーバーが混雑しています。しばらく時間をおいてから再度お試しください🙏');
+      }
+
+      // 500番台エラー（サーバーエラー）の場合もリトライ
+      if (response.status >= 500 && retryCount < MAX_RETRIES) {
+        const delay = BASE_DELAY * Math.pow(2, retryCount);
+        console.log(`サーバーエラー。${delay}ms後にリトライします (${retryCount + 1}/${MAX_RETRIES})`);
+        await sleep(delay);
+        return callGemini(systemInstruction, userMessage, retryCount + 1);
+      }
+
+      throw new Error(errorMessage || `Gemini APIエラー: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+
+    if (!text) {
+      throw new Error('Gemini APIから応答が得られませんでした');
+    }
+
+    return text;
+  } catch (error: any) {
+    // ネットワークエラーなどの場合もリトライ
+    if (retryCount < MAX_RETRIES && error.message.includes('fetch')) {
+      const delay = BASE_DELAY * Math.pow(2, retryCount);
+      console.log(`ネットワークエラー。${delay}ms後にリトライします (${retryCount + 1}/${MAX_RETRIES})`);
+      await sleep(delay);
+      return callGemini(systemInstruction, userMessage, retryCount + 1);
+    }
+    throw error;
   }
+}
 
-  const data = await response.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-  if (!text) {
-    throw new Error('Gemini APIから応答が得られませんでした');
-  }
-
-  return text;
+/**
+ * 指定ミリ秒待機するヘルパー関数
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 /**

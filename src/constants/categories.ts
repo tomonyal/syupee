@@ -1,18 +1,18 @@
-import { CategoryInfo, PlanInfo, ExpenseCategory, CoinPackage, RankInfo, UserRank } from '../types';
+import { CategoryInfo, PlanInfo, ExpenseCategory, CoinPackage, OCRQuotaPackage, ChatQuotaPackage, RankInfo, UserRank } from '../types';
 
 // カテゴリ定義（住居を除外）
 export const CATEGORIES: CategoryInfo[] = [
-  { key: 'food', label: '食費', icon: 'cart', color: '#FF6B6B' },
-  { key: 'daily_necessities', label: '日用品', icon: 'basket', color: '#FFA94D' },
-  { key: 'transportation', label: '交通費', icon: 'train', color: '#51CF66' },
-  { key: 'eating_out', label: '外食', icon: 'restaurant', color: '#FF922B' },
-  { key: 'hobby', label: '趣味・娯楽', icon: 'game-controller', color: '#CC5DE8' },
-  { key: 'clothing', label: '衣服', icon: 'shirt', color: '#F06595' },
-  { key: 'medical', label: '医療', icon: 'medkit', color: '#20C997' },
-  { key: 'communication', label: '通信費', icon: 'phone-portrait', color: '#339AF0' },
-  { key: 'utilities', label: '水道光熱費', icon: 'flash', color: '#FCC419' },
-  { key: 'education', label: '教育', icon: 'school', color: '#748FFC' },
-  { key: 'other', label: 'その他', icon: 'ellipsis-horizontal', color: '#868E96' },
+  { key: 'food', label: '食費', icon: 'cart', color: '#FF9800' },
+  { key: 'daily_necessities', label: '日用品', icon: 'basket', color: '#FFB74D' },
+  { key: 'transportation', label: '交通費', icon: 'train', color: '#66BB6A' },
+  { key: 'eating_out', label: '外食', icon: 'restaurant', color: '#FF7043' },
+  { key: 'hobby', label: '趣味・娯楽', icon: 'game-controller', color: '#AB47BC' },
+  { key: 'clothing', label: '衣服', icon: 'shirt', color: '#EC407A' },
+  { key: 'medical', label: '医療', icon: 'medkit', color: '#26A69A' },
+  { key: 'communication', label: '通信費', icon: 'phone-portrait', color: '#42A5F5' },
+  { key: 'utilities', label: '水道光熱費', icon: 'flash', color: '#FFCA28' },
+  { key: 'education', label: '教育', icon: 'school', color: '#5C6BC0' },
+  { key: 'other', label: 'その他', icon: 'ellipsis-horizontal', color: '#78909C' },
 ];
 
 export const CATEGORY_MAP: Record<ExpenseCategory, CategoryInfo> = Object.fromEntries(
@@ -74,14 +74,38 @@ export const COIN_PACKAGE_MAP: Record<string, CoinPackage> = Object.fromEntries(
 // レシート1回あたりのコイン消費
 export const COIN_PER_SCAN = 10;
 
-// ランク定義
+// OCR枠パッケージ定義
+export const OCR_QUOTA_PACKAGES: OCRQuotaPackage[] = [
+  { id: 'quota_10', quota: 10, coinCost: 80, label: '10枠パック' },
+  { id: 'quota_30', quota: 30, coinCost: 220, label: '30枠パック', popular: true },
+  { id: 'quota_50', quota: 50, coinCost: 350, label: '50枠パック' },
+  { id: 'quota_100', quota: 100, coinCost: 650, label: '100枠パック' },
+];
+
+export const OCR_QUOTA_PACKAGE_MAP: Record<string, OCRQuotaPackage> = Object.fromEntries(
+  OCR_QUOTA_PACKAGES.map((p) => [p.id, p])
+);
+
+// AI相談枠パッケージ定義
+export const CHAT_QUOTA_PACKAGES: ChatQuotaPackage[] = [
+  { id: 'chat_10', quota: 10, coinCost: 60, label: '10回パック' },
+  { id: 'chat_30', quota: 30, coinCost: 160, label: '30回パック', popular: true },
+  { id: 'chat_50', quota: 50, coinCost: 250, label: '50回パック' },
+  { id: 'chat_100', quota: 100, coinCost: 450, label: '100回パック' },
+];
+
+export const CHAT_QUOTA_PACKAGE_MAP: Record<string, ChatQuotaPackage> = Object.fromEntries(
+  CHAT_QUOTA_PACKAGES.map((p) => [p.id, p])
+);
+
+// ランク定義（シーズン制：3ヶ月単位、パーセンタイル基準）
 export const RANKS: RankInfo[] = [
-  { key: 'beginner', label: 'ビギナー', icon: '🐣', color: '#BDBDCC', minScans: 0, description: 'はじめの一歩！' },
-  { key: 'bronze', label: 'ブロンズ', icon: '🥉', color: '#CD7F32', minScans: 5, description: '記録上手になってきた！' },
-  { key: 'silver', label: 'シルバー', icon: '🥈', color: '#C0C0C0', minScans: 15, description: '節約の達人！' },
-  { key: 'gold', label: 'ゴールド', icon: '🥇', color: '#FFD700', minScans: 30, description: '家計管理マスター！' },
-  { key: 'platinum', label: 'プラチナ', icon: '💎', color: '#7C4DFF', minScans: 60, description: 'シュッピくんの親友！' },
-  { key: 'diamond', label: 'ダイヤモンド', icon: '👑', color: '#FF6B9D', minScans: 100, description: '伝説の節約王！' },
+  { key: 'beginner', label: 'ビギナー', icon: '🐣', color: '#BDBDCC', minScans: 0, minPercentile: 0, description: 'はじめの一歩！', rewardCoins: 0 },
+  { key: 'bronze', label: 'ブロンズ', icon: '🥉', color: '#CD7F32', minScans: 5, minPercentile: 70, description: '頑張ってる！', rewardCoins: 30 },
+  { key: 'silver', label: 'シルバー', icon: '🥈', color: '#C0C0C0', minScans: 15, minPercentile: 50, description: '節約の達人！', rewardCoins: 100 },
+  { key: 'gold', label: 'ゴールド', icon: '🥇', color: '#FFD700', minScans: 30, minPercentile: 30, description: '家計管理マスター！', rewardCoins: 250 },
+  { key: 'platinum', label: 'プラチナ', icon: '💎', color: '#7C4DFF', minScans: 60, minPercentile: 10, description: 'トップクラス！', rewardCoins: 500 },
+  { key: 'diamond', label: 'ダイヤモンド', icon: '👑', color: '#FF6B9D', minScans: 100, minPercentile: 3, description: '伝説の節約王！', rewardCoins: 800 },
 ];
 
 export const RANK_MAP: Record<UserRank, RankInfo> = Object.fromEntries(
@@ -104,4 +128,29 @@ export function getNextRankInfo(scanCount: number): { nextRank: RankInfo | null;
   if (idx >= RANKS.length - 1) return { nextRank: null, remaining: 0 };
   const nextRank = RANKS[idx + 1];
   return { nextRank, remaining: nextRank.minScans - scanCount };
+}
+
+/**
+ * パーセンタイルからランクを取得（シーズン制用）
+ * @param percentile 上位○%（100が最上位、0が最下位）
+ */
+export function getRankFromPercentile(percentile: number): RankInfo {
+  // パーセンタイルが高い方が上位なので、降順にチェック
+  for (let i = RANKS.length - 1; i >= 0; i--) {
+    if (percentile >= RANKS[i].minPercentile) {
+      return RANKS[i];
+    }
+  }
+  return RANKS[0]; // フォールバック
+}
+
+/**
+ * スキャン数とランキングからパーセンタイルを計算
+ * @param myRanking 自分の順位（1位、2位、...）
+ * @param totalUsers 総ユーザー数
+ */
+export function calculatePercentile(myRanking: number, totalUsers: number): number {
+  if (totalUsers === 0) return 0;
+  // 上位○%を計算（100が最上位）
+  return Math.round(((totalUsers - myRanking + 1) / totalUsers) * 100);
 }

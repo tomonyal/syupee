@@ -12,12 +12,12 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useCoinStore, usePurchaseStore } from '../store';
 import { isPurchasesAvailable } from '../services/purchases';
-import { COLORS, SPACING, FONT_SIZE, BORDER_RADIUS, COIN_PACKAGES, COIN_PACKAGE_MAP, COIN_PER_SCAN } from '../constants';
-import { CoinPackage } from '../types';
+import { COLORS, SPACING, FONT_SIZE, BORDER_RADIUS, COIN_PACKAGES, COIN_PACKAGE_MAP, COIN_PER_SCAN, OCR_QUOTA_PACKAGES, OCR_QUOTA_PACKAGE_MAP } from '../constants';
+import { CoinPackage, OCRQuotaPackage } from '../types';
 import { CoinOffering } from '../services/purchases';
 
 export default function CoinShopScreen() {
-  const { balance, transactions, isLoading, purchase, loadCoinData } = useCoinStore();
+  const { balance, ocrQuotaBalance, transactions, isLoading, purchase, purchaseQuota, loadCoinData } = useCoinStore();
   const { coinOfferings, isLoadingOfferings, isPurchasing, buyCoinPackage, loadOfferings } = usePurchaseStore();
   const navigation = useNavigation();
   const iapAvailable = isPurchasesAvailable();
@@ -76,6 +76,28 @@ export default function CoinShopScreen() {
     );
   };
 
+  // OCR枠の購入
+  const handleQuotaPurchase = (pkg: OCRQuotaPackage) => {
+    Alert.alert(
+      'OCR枠を購入',
+      `${pkg.label}\n${pkg.quota}枠を${pkg.coinCost}コインで購入しますか？\n\n残高: ${balance}コイン\n翌月以降も繰り越されます`,
+      [
+        { text: 'キャンセル', style: 'cancel' },
+        {
+          text: '購入する',
+          onPress: async () => {
+            try {
+              await purchaseQuota(pkg.quota, pkg.coinCost);
+              Alert.alert('購入完了！', `${pkg.quota}枠を獲得しました 📸\n翌月以降も使えます`);
+            } catch (e: any) {
+              Alert.alert('エラー', e.message);
+            }
+          },
+        },
+      ]
+    );
+  };
+
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       {/* 残高カード */}
@@ -89,6 +111,11 @@ export default function CoinShopScreen() {
         <Text style={styles.balanceHint}>
           レシート読み込み 1回 = {COIN_PER_SCAN}コイン
         </Text>
+        <View style={styles.quotaRow}>
+          <Text style={styles.quotaLabel}>📸 OCR枠残高</Text>
+          <Text style={styles.quotaAmount}>{ocrQuotaBalance}枠</Text>
+        </View>
+        <Text style={styles.quotaHint}>プラン枠を超えたら自動で消費（翌月繰越）</Text>
       </View>
 
       {/* コインパッケージ */}
@@ -212,15 +239,17 @@ const styles = StyleSheet.create({
     paddingBottom: SPACING.xxl,
   },
   balanceCard: {
-    backgroundColor: COLORS.primary,
+    backgroundColor: COLORS.surface,
     borderRadius: BORDER_RADIUS.lg,
     padding: SPACING.lg,
     alignItems: 'center',
     marginBottom: SPACING.lg,
+    borderWidth: 2,
+    borderColor: COLORS.primary,
   },
   balanceLabel: {
     fontSize: FONT_SIZE.md,
-    color: 'rgba(255,255,255,0.8)',
+    color: COLORS.textSecondary,
     fontWeight: '600',
   },
   balanceRow: {
@@ -235,16 +264,40 @@ const styles = StyleSheet.create({
   balanceAmount: {
     fontSize: 40,
     fontWeight: '900',
-    color: COLORS.textOnPrimary,
+    color: '#F57C00',
   },
   balanceUnit: {
     fontSize: FONT_SIZE.lg,
-    color: 'rgba(255,255,255,0.8)',
+    color: COLORS.textSecondary,
     fontWeight: '600',
   },
   balanceHint: {
     fontSize: FONT_SIZE.sm,
-    color: 'rgba(255,255,255,0.7)',
+    color: COLORS.textSecondary,
+  },
+  quotaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+    marginTop: SPACING.md,
+    paddingTop: SPACING.sm,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.divider,
+  },
+  quotaLabel: {
+    fontSize: FONT_SIZE.md,
+    color: COLORS.text,
+    fontWeight: '600',
+  },
+  quotaAmount: {
+    fontSize: FONT_SIZE.xl,
+    fontWeight: '900',
+    color: COLORS.secondary,
+  },
+  quotaHint: {
+    fontSize: FONT_SIZE.xs,
+    color: COLORS.textSecondary,
+    marginTop: SPACING.xs,
   },
   sectionTitle: {
     fontSize: FONT_SIZE.xl,
@@ -273,6 +326,10 @@ const styles = StyleSheet.create({
   packageCardPopular: {
     borderColor: COLORS.primary,
     backgroundColor: '#FFF0F5',
+  },
+  quotaPackageCard: {
+    borderColor: '#9C27B0',
+    backgroundColor: '#F3E5F5',
   },
   popularBadge: {
     position: 'absolute',
@@ -306,6 +363,20 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZE.xxl,
     fontWeight: '900',
     color: COLORS.text,
+  },
+  quotaCostRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: SPACING.xs,
+  },
+  quotaCoinIcon: {
+    fontSize: 16,
+  },
+  quotaCost: {
+    fontSize: FONT_SIZE.lg,
+    fontWeight: '700',
+    color: '#9C27B0',
   },
   packagePrice: {
     fontSize: FONT_SIZE.lg,

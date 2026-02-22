@@ -14,6 +14,12 @@ interface ExpenseItemCardProps {
 
 export default function ExpenseItemCard({ expense, onPress }: ExpenseItemCardProps) {
   const categoryInfo = CATEGORY_MAP[expense.category];
+  const categoryLabels = Array.from(
+    new Set(
+      expense.items.map((item) => CATEGORY_MAP[item.category ?? expense.category]?.label || 'その他')
+    )
+  );
+  const categoryText = categoryLabels.join('・');
 
   const formattedDate = (() => {
     try {
@@ -42,7 +48,9 @@ export default function ExpenseItemCard({ expense, onPress }: ExpenseItemCardPro
           {expense.storeName || '不明な店舗'}
         </Text>
         <View style={styles.metaRow}>
-          <Text style={styles.category}>{categoryInfo?.label || 'その他'}</Text>
+          <Text style={styles.category} numberOfLines={1}>
+            {categoryText}
+          </Text>
           <Text style={styles.date}>{formattedDate}</Text>
         </View>
       </View>

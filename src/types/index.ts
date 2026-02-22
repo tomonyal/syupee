@@ -16,6 +16,7 @@ export interface ExpenseItem {
   name: string;
   price: number;
   quantity: number;
+  category?: ExpenseCategory;
 }
 
 // カテゴリ
@@ -87,6 +88,24 @@ export interface CoinPackage {
   popular?: boolean;
 }
 
+// OCR枠パッケージ
+export interface OCRQuotaPackage {
+  id: string;
+  quota: number; // 枠数
+  coinCost: number; // コイン
+  label: string;
+  popular?: boolean;
+}
+
+// AI相談枠パッケージ
+export interface ChatQuotaPackage {
+  id: string;
+  quota: number; // 枠数
+  coinCost: number; // コイン
+  label: string;
+  popular?: boolean;
+}
+
 // コイン取引履歴
 export interface CoinTransaction {
   id: string;
@@ -104,8 +123,40 @@ export interface RankInfo {
   label: string;
   icon: string;
   color: string;
-  minScans: number; // 月間最低スキャン数
+  minScans: number; // 月間最低スキャン数（旧システム用）
+  minPercentile: number; // 上位○%（0-100）、シーズンランク用
   description: string;
+  rewardCoins: number; // シーズン末報酬コイン数
+}
+
+// 月次ランク履歴
+export interface MonthlyRankHistory {
+  id: string;
+  month: string; // YYYY-MM
+  rank: UserRank;
+  scanCount: number;
+  rewardCoins: number;
+  createdAt: string;
+}
+
+// シーズンランク履歴
+export interface SeasonRankHistory {
+  id: string;
+  seasonId: string; // "2026-Q1" 形式
+  rank: UserRank;
+  scanCount: number;
+  percentile: number; // 上位○%
+  totalUsers: number; // 総ユーザー数
+  rewardCoins: number;
+  createdAt: string;
+}
+
+// シーズンスキャン統計（全ユーザー集計用）
+export interface SeasonScanStats {
+  seasonId: string;
+  userId: string;
+  scanCount: number;
+  updatedAt: string;
 }
 
 export interface PlanInfo {
@@ -172,5 +223,6 @@ export type RootStackParamList = {
   PlanSelect: undefined;
   BudgetSetting: undefined;
   CoinShop: undefined;
+  QuotaPurchase: undefined;
   RankDetail: undefined;
 };

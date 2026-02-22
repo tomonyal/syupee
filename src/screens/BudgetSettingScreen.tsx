@@ -161,7 +161,7 @@ export default function BudgetSettingScreen() {
             <Ionicons
               name="wallet-outline"
               size={18}
-              color={inputMode === 'total' ? COLORS.textOnPrimary : COLORS.text}
+              color={inputMode === 'total' ? '#FFFFFF' : COLORS.text}
             />
             <Text
               style={[styles.modeButtonText, inputMode === 'total' && styles.modeButtonTextActive]}
@@ -176,7 +176,7 @@ export default function BudgetSettingScreen() {
             <Ionicons
               name="list-outline"
               size={18}
-              color={inputMode === 'category' ? COLORS.textOnPrimary : COLORS.text}
+              color={inputMode === 'category' ? '#FFFFFF' : COLORS.text}
             />
             <Text
               style={[
@@ -215,7 +215,7 @@ export default function BudgetSettingScreen() {
                 disabled={isAllocating || totalBudgetNum <= 0}
               >
                 {isAllocating ? (
-                  <ActivityIndicator color={COLORS.textOnPrimary} size="small" />
+                  <ActivityIndicator color="#FFFFFF" size="small" />
                 ) : (
                   <>
                     <Text style={styles.aiButtonEmoji}>🐣</Text>
@@ -324,10 +324,10 @@ export default function BudgetSettingScreen() {
           disabled={isLoading}
         >
           {isLoading ? (
-            <ActivityIndicator color={COLORS.textOnPrimary} size="small" />
+            <ActivityIndicator color="#FFFFFF" size="small" />
           ) : (
             <>
-              <Ionicons name="checkmark-circle" size={22} color={COLORS.textOnPrimary} />
+              <Ionicons name="checkmark-circle" size={22} color="#FFFFFF" />
               <Text style={styles.saveButtonText}>予算を保存</Text>
             </>
           )}
@@ -372,7 +372,7 @@ const styles = StyleSheet.create({
     color: COLORS.text,
   },
   modeButtonTextActive: {
-    color: COLORS.textOnPrimary,
+    color: '#FFFFFF',
   },
   totalCard: {
     padding: SPACING.lg,
@@ -428,7 +428,7 @@ const styles = StyleSheet.create({
     fontSize: 22,
   },
   aiButtonText: {
-    color: COLORS.textOnPrimary,
+    color: '#FFFFFF',
     fontSize: FONT_SIZE.lg,
     fontWeight: 'bold',
   },
@@ -536,7 +536,7 @@ const styles = StyleSheet.create({
     opacity: 0.6,
   },
   saveButtonText: {
-    color: COLORS.textOnPrimary,
+    color: '#FFFFFF',
     fontSize: FONT_SIZE.lg,
     fontWeight: 'bold',
   },

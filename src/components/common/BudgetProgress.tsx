@@ -100,47 +100,49 @@ export default function BudgetProgress({
       {/* カテゴリ別内訳 */}
       {showCategoryBreakdown && (
         <View style={styles.categorySection}>
-          {budget.categoryBudgets
-            .filter((cb) => {
-              if (cb.amount <= 0) return false;
-              const catSpent =
-                summary?.categoryBreakdown.find((b) => b.category === cb.category)?.amount || 0;
-              return catSpent > 0;
-            })
-            .map((cb) => {
-              const info = CATEGORY_MAP[cb.category];
-              const catSpent =
-                summary?.categoryBreakdown.find((b) => b.category === cb.category)?.amount || 0;
-              const catRatio = Math.min(catSpent / cb.amount, 1);
-              const catPct = Math.round(catRatio * 100);
-              const catOver = catSpent > cb.amount;
-              const catBarColor = catOver
-                ? COLORS.error
-                : catPct >= 80
-                ? COLORS.warning
-                : info?.color || COLORS.success;
+          <Text style={styles.categorySectionTitle}>📊 カテゴリ別予算</Text>
+          {budget.categoryBudgets.filter((cb) => cb.amount > 0).length === 0 ? (
+            <Text style={styles.noCategoryBudgetText}>
+              カテゴリー別の予算が設定されていません
+            </Text>
+          ) : (
+            budget.categoryBudgets
+              .filter((cb) => cb.amount > 0)
+              .map((cb) => {
+                const info = CATEGORY_MAP[cb.category];
+                const catSpent =
+                  summary?.categoryBreakdown.find((b) => b.category === cb.category)?.amount || 0;
+                const catRatio = Math.min(catSpent / cb.amount, 1);
+                const catPct = Math.round(catRatio * 100);
+                const catOver = catSpent > cb.amount;
+                const catBarColor = catOver
+                  ? COLORS.error
+                  : catPct >= 80
+                  ? COLORS.warning
+                  : info?.color || COLORS.success;
 
-              return (
-                <View key={cb.category} style={styles.categoryRow}>
-                  <View style={styles.categoryHeader}>
-                    <View style={[styles.categoryDot, { backgroundColor: info?.color }]} />
-                    <Text style={styles.categoryLabel}>{info?.label}</Text>
-                    <Text style={[styles.categoryPct, { color: catBarColor }]}>{catPct}%</Text>
-                    <Text style={styles.categoryAmount}>
-                      ¥{catSpent.toLocaleString()} / ¥{cb.amount.toLocaleString()}
-                    </Text>
+                return (
+                  <View key={cb.category} style={styles.categoryRow}>
+                    <View style={styles.categoryHeader}>
+                      <View style={[styles.categoryDot, { backgroundColor: info?.color }]} />
+                      <Text style={styles.categoryLabel}>{info?.label}</Text>
+                      <Text style={[styles.categoryPct, { color: catBarColor }]}>{catPct}%</Text>
+                      <Text style={styles.categoryAmount}>
+                        ¥{catSpent.toLocaleString()} / ¥{cb.amount.toLocaleString()}
+                      </Text>
+                    </View>
+                    <View style={styles.categoryBar}>
+                      <View
+                        style={[
+                          styles.categoryBarFill,
+                          { width: `${Math.min(catPct, 100)}%`, backgroundColor: catBarColor },
+                        ]}
+                      />
+                    </View>
                   </View>
-                  <View style={styles.categoryBar}>
-                    <View
-                      style={[
-                        styles.categoryBarFill,
-                        { width: `${Math.min(catPct, 100)}%`, backgroundColor: catBarColor },
-                      ]}
-                    />
-                  </View>
-                </View>
-              );
-            })}
+                );
+              })
+          )}
         </View>
       )}
     </View>
@@ -208,6 +210,19 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: COLORS.divider,
     paddingTop: SPACING.sm,
+  },
+  categorySectionTitle: {
+    fontSize: FONT_SIZE.sm,
+    fontWeight: '700',
+    color: COLORS.text,
+    marginBottom: SPACING.sm,
+  },
+  noCategoryBudgetText: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.textSecondary,
+    fontStyle: 'italic',
+    textAlign: 'center',
+    paddingVertical: SPACING.sm,
   },
   categoryRow: {
     marginBottom: SPACING.sm,

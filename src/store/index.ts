@@ -30,7 +30,17 @@ import {
   addBonusCoins,
   getCoinTransactions,
   getMonthlyScansCount,
+  processMonthlyRankReset,
 } from '../database/coins';
+import {
+  getOCRQuotaBalance,
+  purchaseOCRQuota,
+  useOCRQuota,
+  carryOverQuota,
+  getChatQuotaBalance,
+  purchaseChatQuota,
+  carryOverChatQuota,
+} from '../database/quota';
 import {
   getMonthlyUsage,
   incrementLocalOCRUsage,
@@ -52,8 +62,10 @@ import {
 } from '../services/purchases';
 import { recognizeReceipt } from '../services/ocr';
 import { parseReceiptText, getAIChatResponse, allocateBudgetByAI } from '../services/openai';
-import { PLAN_MAP, COIN_PER_SCAN, COIN_PACKAGES, getRankFromScans } from '../constants';
+import { PLAN_MAP, COIN_PER_SCAN, COIN_PACKAGES, getRankFromScans, getRankFromPercentile, calculatePercentile } from '../constants';
 import { OCRResult, ParsedReceipt, ExpenseCategory, RankInfo } from '../types';
+import { getCurrentSeason, getPreviousSeason, getSeasonDisplayName, type Season } from '../utils';
+import { updateSeasonScanCount, getMySeasonRanking } from '../services/firebase';
 
 // ============================
 // Auth Store
@@ -376,10 +388,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
       await useUsageStore.getState().incrementChat();
       await incrementChatUsage(uid);
     } catch (error: any) {
+      const errorMessage = error.message || 'メッセージの送信に失敗しました';
       set({
         isLoading: false,
-        error: error.message || 'メッセージの送信に失敗しました',
+        error: errorMessage,
       });
+      
+      // 5秒後にエラーメッセージを自動でクリア
+      setTimeout(() => {
+        set({ error: null });
+      }, 5000);
     }
   },
 
@@ -462,12 +480,21 @@ interface CoinState {
   balance: number;
   transactions: CoinTransaction[];
   monthlyScans: number;
+  seasonScans: number; // シーズンスキャン数
   rank: RankInfo;
+  percentile: number; // 上位○%
+  totalUsers: number; // シーズンの総ユーザー数
+  currentSeason: Season;
+  ocrQuotaBalance: number; // OCR枠の残高
+  chatQuotaBalance: number; // AI相談枠の残高
   isLoading: boolean;
   error: string | null;
 
   loadCoinData: () => Promise<void>;
+  loadSeasonRank: () => Promise<void>;
   purchase: (coins: number, price: number) => Promise<void>;
+  purchaseQuota: (quota: number, coinCost: number) => Promise<void>;
+  purchaseChatQuota: (quota: number, coinCost: number) => Promise<void>;
   useForScan: () => Promise<void>;
   addBonus: (amount: number, reason: string) => Promise<void>;
   canScan: () => boolean;
@@ -477,27 +504,71 @@ export const useCoinStore = create<CoinState>((set, get) => ({
   balance: 0,
   transactions: [],
   monthlyScans: 0,
+  seasonScans: 0,
   rank: getRankFromScans(0),
+  percentile: 0,
+  totalUsers: 0,
+  currentSeason: getCurrentSeason(),
+  ocrQuotaBalance: 0,
+  chatQuotaBalance: 0,
   isLoading: false,
   error: null,
 
   loadCoinData: async () => {
     set({ isLoading: true });
     try {
-      const [balance, transactions, monthlyScans] = await Promise.all([
+      // 月初の繰り越し処理
+      await carryOverQuota();
+      await carryOverChatQuota();
+      
+      // 月次ランクリセット処理（前月の報酬を付与）
+      const rankResetResult = await processMonthlyRankReset();
+      
+      const [balance, transactions, monthlyScans, ocrQuotaBalance, chatQuotaBalance] = await Promise.all([
         getCoinBalance(),
         getCoinTransactions(50),
         getMonthlyScansCount(),
+        getOCRQuotaBalance(),
+        getChatQuotaBalance(),
       ]);
+      
       set({
         balance,
         transactions,
         monthlyScans,
+        ocrQuotaBalance,
+        chatQuotaBalance,
         rank: getRankFromScans(monthlyScans),
         isLoading: false,
       });
+      
+      // シーズンランクも読み込む
+      await get().loadSeasonRank();
     } catch (error) {
       set({ isLoading: false, error: 'コインデータの読み込みに失敗しました' });
+    }
+  },
+
+  loadSeasonRank: async () => {
+    try {
+      const { user } = useAuthStore.getState();
+      if (!user) return;
+      
+      const season = getCurrentSeason();
+      const { ranking, totalUsers, percentile, myScanCount } = await getMySeasonRanking(user.uid, season.seasonId);
+      
+      // パーセンタイルからランクを決定
+      const rank = getRankFromPercentile(percentile);
+      
+      set({
+        seasonScans: myScanCount,
+        rank,
+        percentile,
+        totalUsers,
+        currentSeason: season,
+      });
+    } catch (error) {
+      console.error('シーズンランクの読み込みに失敗:', error);
     }
   },
 
@@ -512,13 +583,56 @@ export const useCoinStore = create<CoinState>((set, get) => ({
     }
   },
 
-  useForScan: async () => {
+  purchaseQuota: async (quota, coinCost) => {
     const { balance } = get();
+    if (balance < coinCost) {
+      throw new Error(`コインが足りません（必要: ${coinCost}コイン、残高: ${balance}コイン）`);
+    }
+    set({ isLoading: true, error: null });
+    try {
+      // コインを消費して枠を購入
+      await useCoinsForScan(coinCost);
+      await purchaseOCRQuota(quota, coinCost);
+      await get().loadCoinData();
+    } catch (error: any) {
+      set({ isLoading: false, error: error.message });
+      throw error;
+    }
+  },
+
+  purchaseChatQuota: async (quota, coinCost) => {
+    const { balance } = get();
+    if (balance < coinCost) {
+      throw new Error(`コインが足りません（必要: ${coinCost}コイン、残高: ${balance}コイン）`);
+    }
+    set({ isLoading: true, error: null });
+    try {
+      // コインを消費して枠を購入
+      await useCoinsForScan(coinCost);
+      await purchaseChatQuota(quota, coinCost);
+      await get().loadCoinData();
+    } catch (error: any) {
+      set({ isLoading: false, error: error.message });
+      throw error;
+    }
+  },
+
+  useForScan: async () => {
+    const { balance, seasonScans, currentSeason } = get();
     if (balance < COIN_PER_SCAN) {
       throw new Error(`コインが足りません（必要: ${COIN_PER_SCAN}コイン、残高: ${balance}コイン）`);
     }
     try {
       await useCoinsForScan(COIN_PER_SCAN);
+      
+      // シーズンスキャン数をFirestoreに更新
+      const { user } = useAuthStore.getState();
+      if (user) {
+        const newSeasonScans = seasonScans + 1;
+        await updateSeasonScanCount(user.uid, currentSeason.seasonId, newSeasonScans);
+        set({ seasonScans: newSeasonScans });
+      }
+      
       await get().loadCoinData();
     } catch (error: any) {
       throw error;

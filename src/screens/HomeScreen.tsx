@@ -17,6 +17,7 @@ import { useExpenseStore, useAuthStore, useBudgetStore, useCoinStore, useUsageSt
 import { COLORS, SPACING, FONT_SIZE, BORDER_RADIUS, CATEGORY_MAP, COIN_PER_SCAN, getNextRankInfo } from '../constants';
 import { PLAN_MAP } from '../constants';
 import { getDailyAdvice } from '../services/openai';
+import { getSeasonDisplayName } from '../utils';
 
 const screenWidth = Dimensions.get('window').width;
 
@@ -32,7 +33,7 @@ export default function HomeScreen() {
 
   const { user } = useAuthStore();
   const { budget, loadBudget } = useBudgetStore();
-  const { balance, monthlyScans, rank, loadCoinData } = useCoinStore();
+  const { balance, ocrQuotaBalance, chatQuotaBalance, monthlyScans, seasonScans, rank, percentile, totalUsers, currentSeason, loadCoinData } = useCoinStore();
   const { ocrUsedThisMonth, chatUsedThisMonth, loadUsage } = useUsageStore();
   const navigation = useNavigation<any>();
   const [refreshing, setRefreshing] = React.useState(false);
@@ -122,15 +123,13 @@ export default function HomeScreen() {
           <Text style={styles.coinCardLabel}>コイン</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity
-          style={[styles.rankCard, { borderColor: rank.color }]}
-          activeOpacity={0.7}
-          onPress={() => navigation.navigate('RankDetail')}
-        >
-          <Text style={styles.rankCardIcon}>{rank.icon}</Text>
-          <Text style={[styles.rankCardLabel, { color: rank.color }]}>{rank.label}</Text>
-          <Text style={styles.rankCardScans}>今月 {monthlyScans}回</Text>
-        </TouchableOpacity>
+        <View style={[styles.rankCard, { borderColor: COLORS.border }]}>
+          <Text style={styles.rankCardIcon}>🏅</Text>
+          <Text style={[styles.rankCardLabel, { color: COLORS.textSecondary }]}>ランク</Text>
+          <Text style={[styles.rankCardScans, { color: COLORS.textSecondary, marginTop: 8 }]}>
+            開発中...
+          </Text>
+        </View>
       </View>
 
       {/* 今日のアドバイス */}
@@ -162,39 +161,143 @@ export default function HomeScreen() {
 
       {/* 利用状況 */}
       {planInfo && user && (
-        <Card title="📊 利用状況" style={styles.usageCard}>
+        <Card style={styles.usageCard}>
+          <View style={styles.usageCardHeader}>
+            <Text style={styles.usageCardTitle}>📊 利用状況</Text>
+            <TouchableOpacity
+              style={styles.quotaPurchaseButton}
+              onPress={() => navigation.navigate('QuotaPurchase')}
+            >
+              <Ionicons name="add-circle" size={20} color={COLORS.text} />
+              <Text style={styles.quotaPurchaseButtonText}>追加購入</Text>
+            </TouchableOpacity>
+          </View>
           <View style={styles.usageRow}>
             <Text style={styles.usageLabel}>OCR撮影</Text>
             <Text style={styles.usageValue}>
-              {ocrUsedThisMonth} / {planInfo.ocrLimit}回
+              {ocrUsedThisMonth} / {planInfo.ocrLimit + ocrQuotaBalance}回
             </Text>
             <View style={styles.usageBar}>
+              {/* プラン枠内の使用済み（青） */}
               <View
                 style={[
                   styles.usageBarFill,
                   {
-                    width: `${Math.min((ocrUsedThisMonth / planInfo.ocrLimit) * 100, 100)}%`,
-                    backgroundColor: COLORS.primary,
+                    width: `${(Math.min(ocrUsedThisMonth, planInfo.ocrLimit) / (planInfo.ocrLimit + ocrQuotaBalance)) * 100}%`,
+                    backgroundColor: '#2196F3',
                   },
                 ]}
               />
+              {/* プラン枠内の未使用（グレー） */}
+              <View
+                style={[
+                  styles.usageBarFill,
+                  {
+                    width: `${((planInfo.ocrLimit - Math.min(ocrUsedThisMonth, planInfo.ocrLimit)) / (planInfo.ocrLimit + ocrQuotaBalance)) * 100}%`,
+                    backgroundColor: '#E0E0E0',
+                  },
+                ]}
+              />
+              {/* 追加購入分の使用済み（オレンジ） */}
+              {ocrUsedThisMonth > planInfo.ocrLimit && (
+                <View
+                  style={[
+                    styles.usageBarFill,
+                    {
+                      width: `${((Math.min(ocrUsedThisMonth - planInfo.ocrLimit, ocrQuotaBalance) / (planInfo.ocrLimit + ocrQuotaBalance)) * 100)}%`,
+                      backgroundColor: '#FF9800',
+                    },
+                  ]}
+                />
+              )}
+              {/* 追加購入分の未使用（薄いオレンジ） */}
+              {ocrQuotaBalance > 0 && (
+                <View
+                  style={[
+                    styles.usageBarFill,
+                    {
+                      width: `${((ocrQuotaBalance - Math.max(0, ocrUsedThisMonth - planInfo.ocrLimit)) / (planInfo.ocrLimit + ocrQuotaBalance)) * 100}%`,
+                      backgroundColor: '#FFE0B2',
+                    },
+                  ]}
+                />
+              )}
+            </View>
+            <View style={styles.usageLegend}>
+              <View style={styles.legendItem}>
+                <View style={[styles.legendColor, { backgroundColor: '#2196F3' }]} />
+                <Text style={styles.legendText}>プラン枠使用（{Math.min(ocrUsedThisMonth, planInfo.ocrLimit)}/{planInfo.ocrLimit}）</Text>
+              </View>
+              {ocrQuotaBalance > 0 && (
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendColor, { backgroundColor: '#FF9800' }]} />
+                  <Text style={styles.legendText}>追加購入使用（{Math.max(0, ocrUsedThisMonth - planInfo.ocrLimit)}/{ocrQuotaBalance}）</Text>
+                </View>
+              )}
             </View>
           </View>
           <View style={styles.usageRow}>
             <Text style={styles.usageLabel}>AI相談</Text>
             <Text style={styles.usageValue}>
-              {chatUsedThisMonth} / {planInfo.chatLimit}回
+              {chatUsedThisMonth} / {planInfo.chatLimit + chatQuotaBalance}回
             </Text>
             <View style={styles.usageBar}>
+              {/* プラン枠内の使用済み（緑） */}
               <View
                 style={[
                   styles.usageBarFill,
                   {
-                    width: `${Math.min((chatUsedThisMonth / planInfo.chatLimit) * 100, 100)}%`,
-                    backgroundColor: COLORS.secondary,
+                    width: `${(Math.min(chatUsedThisMonth, planInfo.chatLimit) / (planInfo.chatLimit + chatQuotaBalance)) * 100}%`,
+                    backgroundColor: '#4CAF50',
                   },
                 ]}
               />
+              {/* プラン枠内の未使用（グレー） */}
+              <View
+                style={[
+                  styles.usageBarFill,
+                  {
+                    width: `${((planInfo.chatLimit - Math.min(chatUsedThisMonth, planInfo.chatLimit)) / (planInfo.chatLimit + chatQuotaBalance)) * 100}%`,
+                    backgroundColor: '#E0E0E0',
+                  },
+                ]}
+              />
+              {/* 追加購入分の使用済み（濃い緑） */}
+              {chatUsedThisMonth > planInfo.chatLimit && (
+                <View
+                  style={[
+                    styles.usageBarFill,
+                    {
+                      width: `${((Math.min(chatUsedThisMonth - planInfo.chatLimit, chatQuotaBalance) / (planInfo.chatLimit + chatQuotaBalance)) * 100)}%`,
+                      backgroundColor: '#2E7D32',
+                    },
+                  ]}
+                />
+              )}
+              {/* 追加購入分の未使用（薄い緑） */}
+              {chatQuotaBalance > 0 && (
+                <View
+                  style={[
+                    styles.usageBarFill,
+                    {
+                      width: `${((chatQuotaBalance - Math.max(0, chatUsedThisMonth - planInfo.chatLimit)) / (planInfo.chatLimit + chatQuotaBalance)) * 100}%`,
+                      backgroundColor: '#C8E6C9',
+                    },
+                  ]}
+                />
+              )}
+            </View>
+            <View style={styles.usageLegend}>
+              <View style={styles.legendItem}>
+                <View style={[styles.legendColor, { backgroundColor: '#4CAF50' }]} />
+                <Text style={styles.legendText}>プラン枠使用（{Math.min(chatUsedThisMonth, planInfo.chatLimit)}/{planInfo.chatLimit}）</Text>
+              </View>
+              {chatQuotaBalance > 0 && (
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendColor, { backgroundColor: '#2E7D32' }]} />
+                  <Text style={styles.legendText}>追加購入使用（{Math.max(0, chatUsedThisMonth - planInfo.chatLimit)}/{chatQuotaBalance}）</Text>
+                </View>
+              )}
             </View>
           </View>
         </Card>
@@ -205,14 +308,14 @@ export default function HomeScreen() {
         <Card title="📈 カテゴリ別支出" style={styles.chartCard}>
           <PieChart
             data={chartData}
-            width={screenWidth - SPACING.xl * 2 - SPACING.md * 2}
-            height={200}
+            width={screenWidth - SPACING.xl * 4}
+            height={160}
             chartConfig={{
               color: (opacity = 1) => `rgba(0, 0, 0, ${opacity})`,
             }}
             accessor="amount"
             backgroundColor="transparent"
-            paddingLeft="0"
+            paddingLeft="20"
             absolute
           />
         </Card>
@@ -256,22 +359,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: SPACING.xl,
     marginBottom: SPACING.md,
-    backgroundColor: COLORS.primary,
+    backgroundColor: COLORS.surface,
   },
   summaryLabel: {
     fontSize: FONT_SIZE.md,
-    color: 'rgba(255,255,255,0.8)',
+    color: COLORS.textSecondary,
     fontWeight: '600',
   },
   summaryAmount: {
     fontSize: 36,
     fontWeight: '900',
-    color: COLORS.textOnPrimary,
+    color: '#F57C00',
     marginVertical: SPACING.xs,
   },
   summaryCount: {
     fontSize: FONT_SIZE.sm,
-    color: 'rgba(255,255,255,0.7)',
+    color: COLORS.textSecondary,
   },
   coinRankRow: {
     flexDirection: 'row',
@@ -320,6 +423,12 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     fontWeight: '600',
   },
+  rankCardReward: {
+    fontSize: FONT_SIZE.xs,
+    color: COLORS.accent,
+    fontWeight: '700',
+    marginTop: 4,
+  },
   adviceCard: {
     marginBottom: SPACING.md,
     backgroundColor: COLORS.surfaceLight,
@@ -357,6 +466,31 @@ const styles = StyleSheet.create({
   usageCard: {
     marginBottom: SPACING.md,
   },
+  usageCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: SPACING.sm,
+  },
+  usageCardTitle: {
+    fontSize: FONT_SIZE.lg,
+    fontWeight: '700',
+    color: COLORS.text,
+  },
+  quotaPurchaseButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.xs,
+    backgroundColor: COLORS.primaryLight,
+    borderRadius: BORDER_RADIUS.md,
+  },
+  quotaPurchaseButtonText: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.text,
+    fontWeight: '600',
+  },
   usageRow: {
     marginBottom: SPACING.sm,
   },
@@ -372,15 +506,41 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginBottom: 4,
   },
+  quotaNote: {
+    fontSize: FONT_SIZE.xs,
+    color: '#9C27B0',
+    fontWeight: '600',
+    marginTop: 2,
+  },
   usageBar: {
     height: 6,
     backgroundColor: COLORS.border,
     borderRadius: 3,
     overflow: 'hidden',
+    flexDirection: 'row',
   },
   usageBarFill: {
     height: '100%',
-    borderRadius: 3,
+  },
+  usageLegend: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: SPACING.sm,
+    marginTop: SPACING.xs,
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  legendColor: {
+    width: 12,
+    height: 12,
+    borderRadius: 2,
+  },
+  legendText: {
+    fontSize: FONT_SIZE.xs,
+    color: COLORS.textSecondary,
   },
   chartCard: {
     marginBottom: SPACING.md,

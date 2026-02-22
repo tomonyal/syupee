@@ -20,6 +20,7 @@ import EditExpenseScreen from '../screens/EditExpenseScreen';
 import PlanSelectScreen from '../screens/PlanSelectScreen';
 import BudgetSettingScreen from '../screens/BudgetSettingScreen';
 import CoinShopScreen from '../screens/CoinShopScreen';
+import QuotaPurchaseScreen from '../screens/QuotaPurchaseScreen';
 import RankDetailScreen from '../screens/RankDetailScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -200,10 +201,17 @@ export default function AppNavigator() {
               options={{ title: 'コインショップ' }}
             />
             <Stack.Screen
+              name="QuotaPurchase"
+              component={QuotaPurchaseScreen}
+              options={{ title: '枠を追加購入' }}
+            />
+            {/* ランクシステム：開発中のため一旦非表示
+            <Stack.Screen
               name="RankDetail"
               component={RankDetailScreen}
               options={{ title: 'ランク' }}
             />
+            */}
           </>
         )}
       </Stack.Navigator>

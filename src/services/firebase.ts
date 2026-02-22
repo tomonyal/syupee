@@ -28,10 +28,16 @@ import {
   getDoc,
   setDoc,
   updateDoc,
+  collection,
+  query,
+  where,
+  orderBy,
+  getDocs,
+  increment,
   Firestore,
 } from 'firebase/firestore';
 import { FIREBASE_CONFIG, GOOGLE_CONFIG } from './config';
-import { User, SubscriptionPlan } from '../types';
+import { User, SubscriptionPlan, SeasonScanStats } from '../types';
 
 // Google Sign-In を動的に読み込み（Expo Go では利用不可）
 let GoogleSignin: any = null;
@@ -240,4 +246,94 @@ export function onAuthChange(callback: (user: FirebaseUser | null) => void): () 
 export function getCurrentFirebaseUser(): FirebaseUser | null {
   if (!isFirebaseAvailable || !auth) return null;
   return auth.currentUser;
+}
+
+// ============================
+// シーズンランク関連
+// ============================
+
+/**
+ * シーズンのスキャン数を更新（Firestore）
+ */
+export async function updateSeasonScanCount(uid: string, seasonId: string, scanCount: number): Promise<void> {
+  if (!isFirebaseAvailable || !firestore) return;
+  
+  const seasonStatsRef = doc(firestore, 'seasonStats', `${uid}_${seasonId}`);
+  await setDoc(seasonStatsRef, {
+    userId: uid,
+    seasonId,
+    scanCount,
+    updatedAt: new Date().toISOString(),
+  }, { merge: true });
+}
+
+/**
+ * シーズンのスキャン数を取得（Firestore）
+ */
+export async function getSeasonScanCount(uid: string, seasonId: string): Promise<number> {
+  if (!isFirebaseAvailable || !firestore) return 0;
+  
+  const seasonStatsRef = doc(firestore, 'seasonStats', `${uid}_${seasonId}`);
+  const snap = await getDoc(seasonStatsRef);
+  
+  if (!snap.exists()) return 0;
+  return snap.data().scanCount || 0;
+}
+
+/**
+ * 指定シーズンの全ユーザーのスキャン数を取得し、降順にソート
+ */
+export async function getAllSeasonScans(seasonId: string): Promise<SeasonScanStats[]> {
+  if (!isFirebaseAvailable || !firestore) return [];
+  
+  const seasonStatsQuery = query(
+    collection(firestore, 'seasonStats'),
+    where('seasonId', '==', seasonId),
+    orderBy('scanCount', 'desc')
+  );
+  
+  const snapshot = await getDocs(seasonStatsQuery);
+  const results: SeasonScanStats[] = [];
+  
+  snapshot.forEach((doc) => {
+    const data = doc.data();
+    results.push({
+      seasonId: data.seasonId,
+      userId: data.userId,
+      scanCount: data.scanCount || 0,
+      updatedAt: data.updatedAt,
+    });
+  });
+  
+  return results;
+}
+
+/**
+ * 自分のシーズンランキングとパーセンタイルを計算
+ */
+export async function getMySeasonRanking(uid: string, seasonId: string): Promise<{
+  ranking: number;
+  totalUsers: number;
+  percentile: number;
+  myScanCount: number;
+}> {
+  const allScans = await getAllSeasonScans(seasonId);
+  const totalUsers = allScans.length;
+  
+  if (totalUsers === 0) {
+    return { ranking: 0, totalUsers: 0, percentile: 0, myScanCount: 0 };
+  }
+  
+  const myIndex = allScans.findIndex((s) => s.userId === uid);
+  
+  if (myIndex === -1) {
+    // 自分のデータが見つからない場合
+    return { ranking: totalUsers + 1, totalUsers, percentile: 0, myScanCount: 0 };
+  }
+  
+  const ranking = myIndex + 1;
+  const myScanCount = allScans[myIndex].scanCount;
+  const percentile = Math.round(((totalUsers - ranking + 1) / totalUsers) * 100);
+  
+  return { ranking, totalUsers, percentile, myScanCount };
 }

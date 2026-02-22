@@ -39,36 +39,48 @@ export default function ExpenseListScreen() {
       {/* ヘッダー部分: FlatListの外に配置して再マウントを防ぐ */}
       <MonthSelector currentMonth={selectedMonth} onMonthChange={setSelectedMonth} />
 
-      {/* 月間合計 */}
-      <View style={styles.totalRow}>
-        <Text style={styles.totalLabel}>
-          {selectedCategory
-            ? `${CATEGORY_MAP[selectedCategory]?.label || ''} 合計`
-            : '月間合計'}
-        </Text>
-        <Text style={styles.totalAmount}>
-          ¥{(currentMonthSummary?.totalAmount || 0).toLocaleString()}
-        </Text>
-      </View>
-
-      {/* 予算インジケーター */}
-      {budget && budget.totalBudget > 0 && (
-        <View style={styles.budgetWrapper}>
-          <BudgetProgress
-            budget={budget}
-            summary={currentMonthSummary}
-            filterCategory={selectedCategory}
-          />
-        </View>
-      )}
-
-      {/* カテゴリフィルタ */}
-      <CategoryFilter selected={selectedCategory} onSelect={setSelectedCategory} />
-
       <FlatList
         style={{ flex: 1 }}
         data={filteredExpenses}
         keyExtractor={(item) => item.id}
+        ListHeaderComponent={
+          <>
+            {/* 月間合計 */}
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabel}>
+                {selectedCategory
+                  ? `${CATEGORY_MAP[selectedCategory]?.label || ''} 合計`
+                  : '月間合計'}
+              </Text>
+              <Text style={styles.totalAmount}>
+                ¥{(currentMonthSummary?.totalAmount || 0).toLocaleString()}
+              </Text>
+            </View>
+
+            {/* 予算インジケーター */}
+            {budget && budget.totalBudget > 0 ? (
+              <View style={styles.budgetWrapper}>
+                <BudgetProgress
+                  budget={budget}
+                  summary={currentMonthSummary}
+                  filterCategory={selectedCategory}
+                  showCategoryBreakdown={!selectedCategory}
+                />
+              </View>
+            ) : !selectedCategory && (
+              <View style={styles.noBudgetCard}>
+                <Text style={styles.noBudgetIcon}>💡</Text>
+                <Text style={styles.noBudgetTitle}>予算を設定していませんでした。</Text>
+                <Text style={styles.noBudgetDescription}>
+                  予算を設定すると各カテゴリーごとの予算と支出を確認できます。
+                </Text>
+              </View>
+            )}
+
+            {/* カテゴリフィルタ */}
+            <CategoryFilter selected={selectedCategory} onSelect={setSelectedCategory} />
+          </>
+        }
         renderItem={({ item }) => (
           <View style={styles.itemWrapper}>
             <ExpenseItemCard
@@ -135,6 +147,31 @@ const styles = StyleSheet.create({
   },
   budgetWrapper: {
     paddingHorizontal: SPACING.md,
+  },
+  noBudgetCard: {
+    marginHorizontal: SPACING.md,
+    marginBottom: SPACING.sm,
+    backgroundColor: COLORS.surface,
+    borderRadius: 12,
+    padding: SPACING.md,
+    alignItems: 'center',
+  },
+  noBudgetIcon: {
+    fontSize: 32,
+    marginBottom: SPACING.xs,
+  },
+  noBudgetTitle: {
+    fontSize: FONT_SIZE.md,
+    fontWeight: '700',
+    color: COLORS.text,
+    marginBottom: SPACING.xs,
+    textAlign: 'center',
+  },
+  noBudgetDescription: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
+    lineHeight: 20,
   },
   loader: {
     marginTop: SPACING.xxl,

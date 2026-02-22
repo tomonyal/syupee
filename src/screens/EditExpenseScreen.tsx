@@ -14,7 +14,29 @@ import { Button, Card } from '../components';
 import { useExpenseStore } from '../store';
 import { getExpenseById, updateExpense, updateExpenseItems } from '../database';
 import { Expense, ExpenseCategory, ExpenseItem } from '../types';
-import { COLORS, SPACING, FONT_SIZE, BORDER_RADIUS, CATEGORIES, CATEGORY_MAP } from '../constants';
+import { COLORS, SPACING, FONT_SIZE, BORDER_RADIUS, CATEGORIES } from '../constants';
+
+function getDominantCategory(items: ExpenseItem[], fallback: ExpenseCategory): ExpenseCategory {
+  if (items.length === 0) return fallback;
+
+  const categoryTotals = new Map<ExpenseCategory, number>();
+  for (const item of items) {
+    const key = item.category ?? fallback;
+    const subtotal = (item.price || 0) * (item.quantity || 1);
+    categoryTotals.set(key, (categoryTotals.get(key) || 0) + subtotal);
+  }
+
+  let selected = fallback;
+  let maxAmount = -1;
+  for (const [categoryKey, amount] of categoryTotals.entries()) {
+    if (amount > maxAmount) {
+      selected = categoryKey;
+      maxAmount = amount;
+    }
+  }
+
+  return selected;
+}
 
 export default function EditExpenseScreen() {
   const route = useRoute<any>();
@@ -44,7 +66,7 @@ export default function EditExpenseScreen() {
       setAmount(String(expense.amount));
       setCategory(expense.category);
       setMemo(expense.memo);
-      setItems(expense.items);
+      setItems(expense.items.map((item) => ({ ...item, category: item.category ?? expense.category })));
     }
   };
 
@@ -57,15 +79,23 @@ export default function EditExpenseScreen() {
     setIsLoading(true);
     try {
       const expenseId = route.params?.expenseId;
+      const resolvedCategory = getDominantCategory(items, category);
+
       if (expenseId) {
         await updateExpense(expenseId, {
           storeName,
           date: date || new Date().toISOString().split('T')[0],
           amount: Number(amount),
-          category,
+          category: resolvedCategory,
           memo,
         });
-        await updateExpenseItems(expenseId, items);
+        await updateExpenseItems(
+          expenseId,
+          items.map((item) => ({
+            ...item,
+            category: item.category ?? resolvedCategory,
+          }))
+        );
       }
 
       await Promise.all([loadRecentExpenses(), loadMonthlySummary(), loadFilteredExpenses()]);
@@ -79,7 +109,7 @@ export default function EditExpenseScreen() {
   };
 
   const addItem = () => {
-    setItems([...items, { name: '', price: 0, quantity: 1 }]);
+    setItems([...items, { name: '', price: 0, quantity: 1, category }]);
   };
 
   const updateItem = (index: number, field: keyof ExpenseItem, value: string | number) => {
@@ -88,6 +118,8 @@ export default function EditExpenseScreen() {
       updated[index] = { ...updated[index], name: value as string };
     } else if (field === 'price') {
       updated[index] = { ...updated[index], price: Number(value) || 0 };
+    } else if (field === 'category') {
+      updated[index] = { ...updated[index], category: value as ExpenseCategory };
     } else {
       updated[index] = { ...updated[index], quantity: Number(value) || 1 };
     }
@@ -147,23 +179,47 @@ export default function EditExpenseScreen() {
       {/* 明細 */}
       <Card title="🧾 明細" style={styles.itemsCard}>
         {items.map((item, idx) => (
-          <View key={idx} style={styles.itemEditRow}>
-            <TextInput
-              style={[styles.input, styles.itemNameInput]}
-              value={item.name}
-              onChangeText={(v) => updateItem(idx, 'name', v)}
-              placeholder="商品名"
-            />
-            <TextInput
-              style={[styles.input, styles.itemPriceInput]}
-              value={item.price ? String(item.price) : ''}
-              onChangeText={(v) => updateItem(idx, 'price', v)}
-              placeholder="価格"
-              keyboardType="numeric"
-            />
-            <TouchableOpacity onPress={() => removeItem(idx)} style={styles.removeButton}>
-              <Ionicons name="close-circle" size={22} color={COLORS.error} />
-            </TouchableOpacity>
+          <View key={idx} style={styles.itemBlock}>
+            <View style={styles.itemEditRow}>
+              <TextInput
+                style={[styles.input, styles.itemNameInput]}
+                value={item.name}
+                onChangeText={(v) => updateItem(idx, 'name', v)}
+                placeholder="商品名"
+              />
+              <TextInput
+                style={[styles.input, styles.itemPriceInput]}
+                value={item.price ? String(item.price) : ''}
+                onChangeText={(v) => updateItem(idx, 'price', v)}
+                placeholder="価格"
+                keyboardType="numeric"
+              />
+              <TouchableOpacity onPress={() => removeItem(idx)} style={styles.removeButton}>
+                <Ionicons name="close-circle" size={22} color={COLORS.error} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <View style={styles.itemCategoriesRow}>
+                {CATEGORIES.map((cat) => {
+                  const isSelected = (item.category ?? category) === cat.key;
+                  return (
+                    <TouchableOpacity
+                      key={`${idx}-${cat.key}`}
+                      style={[
+                        styles.itemCategoryChip,
+                        isSelected && { backgroundColor: cat.color + '20', borderColor: cat.color },
+                      ]}
+                      onPress={() => updateItem(idx, 'category', cat.key)}
+                    >
+                      <Text style={[styles.itemCategoryChipText, isSelected && { color: cat.color }]}>
+                        {cat.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </ScrollView>
           </View>
         ))}
         <TouchableOpacity style={styles.addItemButton} onPress={addItem}>
@@ -273,11 +329,32 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   itemsCard: {},
+  itemBlock: {
+    marginBottom: SPACING.sm,
+  },
   itemEditRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: SPACING.sm,
-    marginBottom: SPACING.sm,
+  },
+  itemCategoriesRow: {
+    flexDirection: 'row',
+    gap: SPACING.xs,
+    marginTop: SPACING.xs,
+    paddingBottom: 2,
+  },
+  itemCategoryChip: {
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: BORDER_RADIUS.full,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 4,
+    backgroundColor: COLORS.background,
+  },
+  itemCategoryChipText: {
+    fontSize: FONT_SIZE.xs,
+    color: COLORS.textSecondary,
+    fontWeight: '600',
   },
   itemNameInput: {
     flex: 2,

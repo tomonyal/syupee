@@ -98,7 +98,7 @@ export default function Button({
   };
 
   const variantTextStyles: Record<string, TextStyle> = {
-    secondary: { color: COLORS.textOnPrimary },
+    secondary: { color: '#FFFFFF' },
     outline: { color: COLORS.primary },
     ghost: { color: COLORS.primary },
   };
@@ -151,7 +151,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   primaryText: {
-    color: COLORS.textOnPrimary,
+    color: '#FFFFFF',
     fontWeight: '700',
   },
   disabled: {

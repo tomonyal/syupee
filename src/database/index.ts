@@ -26,6 +26,9 @@ export {
   addBonusCoins,
   getCoinTransactions,
   getMonthlyScansCount,
+  processMonthlyRankReset,
+  getMonthlyRankHistory,
+  getMonthRankHistory,
 } from './coins';
 export {
   getMonthlyUsage,
@@ -33,3 +36,14 @@ export {
   incrementLocalChatUsage,
   resetUsage,
 } from './usage';
+export {
+  getOCRQuotaBalance,
+  purchaseOCRQuota,
+  useOCRQuota,
+  carryOverQuota,
+  getQuotaPurchaseHistory,
+  getChatQuotaBalance,
+  purchaseChatQuota,
+  useChatQuota,
+  carryOverChatQuota,
+} from './quota';

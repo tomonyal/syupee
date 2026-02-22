@@ -1,51 +1,51 @@
-// ポップ・カラフルなテーマ
+// シュッピくん カラーテーマ（黄色のひよこ）
 export const COLORS = {
-  // プライマリ
-  primary: '#FF6B9D',
-  primaryLight: '#FF8FB8',
-  primaryDark: '#E5537F',
+  // プライマリ（黄色・ひよこ）
+  primary: '#FDD835',
+  primaryLight: '#FFEB3B',
+  primaryDark: '#F9A825',
 
-  // セカンダリ
-  secondary: '#7C4DFF',
-  secondaryLight: '#A27FFF',
-  secondaryDark: '#5C35CC',
+  // セカンダリ（緑色・グラフ）
+  secondary: '#4CAF50',
+  secondaryLight: '#66BB6A',
+  secondaryDark: '#388E3C',
 
-  // アクセント
-  accent: '#FFD93D',
-  accentLight: '#FFE566',
-  accentDark: '#E6C235',
+  // アクセント（オレンジ・くちばし）
+  accent: '#FF9800',
+  accentLight: '#FFB74D',
+  accentDark: '#F57C00',
 
-  // 背景
-  background: '#FFF5F7',
+  // 背景（クリーム色）
+  background: '#FFF9E6',
   surface: '#FFFFFF',
-  surfaceLight: '#FFFAF0',
+  surfaceLight: '#FFFEF7',
   card: '#FFFFFF',
 
   // テキスト
-  text: '#2D2D3A',
-  textSecondary: '#6B6B80',
-  textLight: '#9999AD',
-  textOnPrimary: '#FFFFFF',
+  text: '#3E2723',
+  textSecondary: '#6D4C41',
+  textLight: '#8D6E63',
+  textOnPrimary: '#3E2723',
 
   // ステータス
-  success: '#51CF66',
-  warning: '#FFA94D',
-  error: '#FF6B6B',
-  info: '#339AF0',
+  success: '#4CAF50',
+  warning: '#FF9800',
+  error: '#F44336',
+  info: '#2196F3',
 
   // その他
-  border: '#F0E6EB',
-  divider: '#F5ECF0',
-  shadow: 'rgba(255, 107, 157, 0.15)',
+  border: '#F5E6D3',
+  divider: '#FAF3E8',
+  shadow: 'rgba(253, 216, 53, 0.2)',
   overlay: 'rgba(0, 0, 0, 0.5)',
 
   // グラデーション
-  gradientStart: '#FF6B9D',
-  gradientEnd: '#FF8FB8',
+  gradientStart: '#FDD835',
+  gradientEnd: '#FFEB3B',
 
   // タブバー
-  tabActive: '#FF6B9D',
-  tabInactive: '#BDBDCC',
+  tabActive: '#FDD835',
+  tabInactive: '#BCAAA4',
 };
 
 export const SPACING = {
