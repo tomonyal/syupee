@@ -36,7 +36,7 @@ export default function LoginScreen() {
           <View style={styles.iconCircle}>
             <Ionicons name="receipt" size={60} color={COLORS.primary} />
           </View>
-          <Text style={styles.appName}>シュッピくん</Text>
+          <Text style={styles.appName}>シュッピー</Text>
           <Text style={styles.tagline}>撮るだけで節約相談 📷✨</Text>
         </View>
 

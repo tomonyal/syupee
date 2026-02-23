@@ -114,7 +114,7 @@ function MainTabs() {
         component={HomeScreen}
         options={({ navigation }) => ({
           title: 'ホーム',
-          headerTitle: 'シュッピくん',
+          headerTitle: 'シュッピー',
           headerRight: makeBudgetHeaderRight(navigation),
         })}
       />

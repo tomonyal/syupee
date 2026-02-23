@@ -59,10 +59,9 @@ export const ADVICE_MONTHS = 3;
 
 // コインパッケージ定義
 export const COIN_PACKAGES: CoinPackage[] = [
-  { id: 'coin_50', coins: 50, price: 80, label: 'おためし' },
-  { id: 'coin_100', coins: 100, price: 120, label: 'お得パック', popular: true },
-  { id: 'coin_300', coins: 300, price: 320, label: 'たっぷりパック' },
-  { id: 'coin_500', coins: 500, price: 480, label: 'メガパック' },
+  { id: 'coin_100', coins: 100, price: 120, label: 'おためし', popular: true },
+  { id: 'coin_300', coins: 300, price: 320, label: 'お得パック' },
+  { id: 'coin_500', coins: 500, price: 480, label: 'たっぷりパック' },
   { id: 'coin_1000', coins: 1000, price: 900, label: 'プレミアムパック' },
 ];
 
@@ -75,11 +74,14 @@ export const COIN_PACKAGE_MAP: Record<string, CoinPackage> = Object.fromEntries(
 export const COIN_PER_SCAN = 10;
 
 // OCR枠パッケージ定義
+// プランの1回あたりコスト基準（スタンダード: 5円/回）より少し高めに設定
+// コイン最安: 0.9円/コイン → 5円/回 ÷ 0.9 = 5.56コイン/回
+// 繰越可能で柔軟性があるため、プランよりやや割高に設定
 export const OCR_QUOTA_PACKAGES: OCRQuotaPackage[] = [
-  { id: 'quota_10', quota: 10, coinCost: 80, label: '10枠パック' },
-  { id: 'quota_30', quota: 30, coinCost: 220, label: '30枠パック', popular: true },
-  { id: 'quota_50', quota: 50, coinCost: 350, label: '50枠パック' },
-  { id: 'quota_100', quota: 100, coinCost: 650, label: '100枠パック' },
+  { id: 'quota_10', quota: 10, coinCost: 90, label: '10枠パック' },
+  { id: 'quota_30', quota: 30, coinCost: 250, label: '30枠パック', popular: true },
+  { id: 'quota_50', quota: 50, coinCost: 400, label: '50枠パック' },
+  { id: 'quota_100', quota: 100, coinCost: 750, label: '100枠パック' },
 ];
 
 export const OCR_QUOTA_PACKAGE_MAP: Record<string, OCRQuotaPackage> = Object.fromEntries(

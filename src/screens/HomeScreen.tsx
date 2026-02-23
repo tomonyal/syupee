@@ -142,7 +142,7 @@ export default function HomeScreen() {
           {adviceLoading ? (
             <View style={styles.adviceLoading}>
               <ActivityIndicator size="small" color={COLORS.secondary} />
-              <Text style={styles.adviceLoadingText}>シュッピくんが考え中...</Text>
+              <Text style={styles.adviceLoadingText}>シュッピーが考え中...</Text>
             </View>
           ) : (
             <Text style={styles.adviceText}>{dailyAdvice}</Text>

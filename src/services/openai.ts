@@ -161,7 +161,7 @@ export async function getAIChatResponse(
     budgetContext = '（予算データの取得に失敗しました）';
   }
 
-  const systemPrompt = `あなたは「シュッピくん」という名前の可愛い節約アドバイザーAIです。
+  const systemPrompt = `あなたは「シュッピー」という名前の可愛い節約アドバイザーAIです。
 ユーザーの家計簿データを元に、親しみやすく具体的な節約アドバイスをします。
 
 キャラクター設定:
@@ -187,7 +187,7 @@ ${budgetContext}
 
   // 会話履歴をテキストに変換
   const historyText = chatHistory
-    .map((msg) => `${msg.role === 'user' ? 'ユーザー' : 'シュッピくん'}: ${msg.content}`)
+    .map((msg) => `${msg.role === 'user' ? 'ユーザー' : 'シュッピー'}: ${msg.content}`)
     .join('\n');
 
   const fullUserMessage = historyText
@@ -232,7 +232,7 @@ export async function getDailyAdvice(): Promise<string | null> {
     return null;
   }
 
-  const systemPrompt = `あなたは「シュッピくん」という名前の可愛い節約アドバイザーAIです。
+  const systemPrompt = `あなたは「シュッピー」という名前の可愛い節約アドバイザーAIです。
 毎日ユーザーに「今日のアドバイス」として、1つの具体的な節約アドバイスをします。
 
 キャラクター設定:

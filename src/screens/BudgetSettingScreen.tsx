@@ -195,7 +195,7 @@ export default function BudgetSettingScreen() {
             <Card style={styles.totalCard}>
               <Text style={styles.sectionTitle}>💰 合計生活費</Text>
               <Text style={styles.sectionDescription}>
-                まとめて生活費を入力すると、シュッピくんが{'\n'}過去の支出データをもとに最適な配分を提案します！
+                まとめて生活費を入力すると、シュッピーが{'\n'}過去の支出データをもとに最適な配分を提案します！
               </Text>
               <View style={styles.totalInputRow}>
                 <Text style={styles.yen}>¥</Text>
@@ -220,7 +220,7 @@ export default function BudgetSettingScreen() {
                   <>
                     <Text style={styles.aiButtonEmoji}>🐣</Text>
                     <Text style={styles.aiButtonText}>
-                      シュッピくんに配分してもらう
+                      シュッピーに配分してもらう
                     </Text>
                   </>
                 )}

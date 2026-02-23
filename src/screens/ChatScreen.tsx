@@ -116,7 +116,7 @@ export default function ChatScreen() {
   const renderWelcome = () => (
     <View style={styles.welcomeContainer}>
       <Text style={styles.welcomeEmoji}>🐣</Text>
-      <Text style={styles.welcomeTitle}>シュッピくんだよ！</Text>
+      <Text style={styles.welcomeTitle}>シュッピーだよ！</Text>
       <Text style={styles.welcomeMessage}>
         家計のことなら何でも聞いてね！{'\n'}
         節約のコツや、支出の分析をお手伝いするよ✨
@@ -170,7 +170,7 @@ export default function ChatScreen() {
       {/* ローディング表示 */}
       {isLoading && (
         <View style={styles.typingIndicator}>
-          <Text style={styles.typingText}>シュッピくんが考え中... 💭</Text>
+          <Text style={styles.typingText}>シュッピーが考え中... 💭</Text>
         </View>
       )}
 
@@ -185,7 +185,7 @@ export default function ChatScreen() {
       <View style={styles.inputArea}>
         <TextInput
           style={styles.textInput}
-          placeholder="シュッピくんに相談する..."
+          placeholder="シュッピーに相談する..."
           placeholderTextColor={COLORS.textLight}
           value={inputText}
           onChangeText={setInputText}

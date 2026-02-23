@@ -130,20 +130,13 @@ export default function SettingsScreen() {
         />
       </SettingsSection>
 
-      {/* コイン＆ランク */}
-      <SettingsSection title="🪙 コイン＆ランク">
+      {/* コイン */}
+      <SettingsSection title="🪙 コイン">
         <SettingsRow
           icon="cart-outline"
           label="コインショップ"
           subtitle="コインを購入してレシートを読み込もう"
           onPress={() => navigation.navigate('CoinShop')}
-          showArrow
-        />
-        <SettingsRow
-          icon="trophy-outline"
-          label="ランク"
-          subtitle="今月のスキャン数でランクアップ！"
-          onPress={() => navigation.navigate('RankDetail')}
           showArrow
         />
       </SettingsSection>
