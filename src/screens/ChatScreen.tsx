@@ -13,27 +13,32 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { EmptyState } from '../components';
-import { useChatStore, useAuthStore, useUsageStore } from '../store';
+import { useChatStore, useAuthStore, useUsageStore, useCoinStore } from '../store';
 import { COLORS, SPACING, FONT_SIZE, BORDER_RADIUS, PLAN_MAP } from '../constants';
 import { ChatMessage } from '../types';
+import { useChatQuota } from '../database/quota';
+import { decrementChatQuotaFirestore } from '../services/firebase';
 
 export default function ChatScreen() {
   const { messages, isLoading, error, loadMessages, sendMessage, clearChat } =
     useChatStore();
-  const { user } = useAuthStore();
+  const { user, refresh } = useAuthStore();
   const { chatUsedThisMonth, loadUsage } = useUsageStore();
+  const { chatQuotaBalance, loadCoinData } = useCoinStore();
   const navigation = useNavigation<any>();
   const [inputText, setInputText] = useState('');
   const flatListRef = useRef<FlatList>(null);
 
-  // 使用上限チェック（ローカルDB）
+  // 使用上限チェック（プラン枠＋追加購入枠）
   const planInfo = user ? PLAN_MAP[user.plan] : null;
-  const isOverLimit = planInfo ? chatUsedThisMonth >= planInfo.chatLimit : false;
+  const isOverPlanLimit = planInfo ? chatUsedThisMonth >= planInfo.chatLimit : false;
+  const isOverTotalLimit = isOverPlanLimit && chatQuotaBalance <= 0;
 
   useFocusEffect(
     useCallback(() => {
       loadMessages();
-      loadUsage();
+      // Firestoreから最新のユーザーデータを取得してからUsageを読み込む
+      refresh().then(() => loadUsage());
     }, [])
   );
 
@@ -49,12 +54,13 @@ export default function ChatScreen() {
     if (!inputText.trim()) return;
     if (!user) return;
 
-    if (isOverLimit) {
+    if (isOverTotalLimit) {
       Alert.alert(
         '利用上限',
-        '今月のAI相談回数が上限に達しました。プランをアップグレードしてください。',
+        '今月のAI相談回数が上限に達しました。追加枠を購入するか、プランをアップグレードしてください。',
         [
           { text: 'キャンセル' },
+          { text: '追加購入', onPress: () => navigation.navigate('QuotaPurchase') },
           {
             text: 'プラン変更',
             onPress: () => navigation.navigate('PlanSelect'),
@@ -62,6 +68,19 @@ export default function ChatScreen() {
         ]
       );
       return;
+    }
+
+    // プラン上限超過 → 追加枠を消費
+    if (isOverPlanLimit && chatQuotaBalance > 0) {
+      try {
+        const success = await useChatQuota();
+        if (success && user) {
+          await decrementChatQuotaFirestore(user.uid);
+          await loadCoinData();
+        }
+      } catch (e) {
+        // 追加枠消費に失敗しても送信は続行
+      }
     }
 
     const text = inputText.trim();
@@ -151,7 +170,7 @@ export default function ChatScreen() {
         </TouchableOpacity>
         {planInfo && user && (
           <Text style={styles.usageText}>
-            残り {planInfo.chatLimit - chatUsedThisMonth}回
+            残り {isOverPlanLimit ? chatQuotaBalance : (planInfo.chatLimit - chatUsedThisMonth + chatQuotaBalance)}回
           </Text>
         )}
       </View>

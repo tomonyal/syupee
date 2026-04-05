@@ -10,24 +10,44 @@ import {
 } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { useCoinStore, usePurchaseStore } from '../store';
+import { useCoinStore, usePurchaseStore, useAuthStore, useUsageStore } from '../store';
 import { isPurchasesAvailable } from '../services/purchases';
-import { COLORS, SPACING, FONT_SIZE, BORDER_RADIUS, COIN_PACKAGES, COIN_PACKAGE_MAP, COIN_PER_SCAN, OCR_QUOTA_PACKAGES, OCR_QUOTA_PACKAGE_MAP } from '../constants';
-import { CoinPackage, OCRQuotaPackage } from '../types';
+import { COLORS, SPACING, FONT_SIZE, BORDER_RADIUS, COIN_PACKAGE_MAP, OCR_QUOTA_PACKAGES, OCR_QUOTA_PACKAGE_MAP, PLAN_MAP } from '../constants';
+import { OCRQuotaPackage } from '../types';
 import { CoinOffering } from '../services/purchases';
 
 export default function CoinShopScreen() {
-  const { balance, ocrQuotaBalance, transactions, isLoading, purchase, purchaseQuota, loadCoinData } = useCoinStore();
+  const { balance, ocrQuotaBalance, transactions, isLoading, purchaseQuota, loadCoinData } = useCoinStore();
   const { coinOfferings, isLoadingOfferings, isPurchasing, buyCoinPackage, loadOfferings } = usePurchaseStore();
+  const { user, refresh } = useAuthStore();
+  const { ocrUsedThisMonth, loadUsage } = useUsageStore();
   const navigation = useNavigation();
-  const iapAvailable = isPurchasesAvailable();
+  const [iapAvailable, setIapAvailable] = React.useState(isPurchasesAvailable());
+
+  const planInfo = user ? PLAN_MAP[user.plan] : null;
+  const ocrRemaining = planInfo ? Math.max(0, planInfo.ocrLimit - ocrUsedThisMonth) : 0;
 
   useFocusEffect(
     useCallback(() => {
       loadCoinData();
-      if (iapAvailable) {
-        loadOfferings();
-      }
+      refresh().then(() => loadUsage());
+      // Stripe初期化を待ってからオファリングをロード
+      const checkAndLoad = async () => {
+        // 最大5秒間、Stripe初期化を待つ
+        for (let i = 0; i < 10; i++) {
+          if (isPurchasesAvailable()) {
+            setIapAvailable(true);
+            loadOfferings();
+            return;
+          }
+          await new Promise(r => setTimeout(r, 500));
+        }
+        setIapAvailable(isPurchasesAvailable());
+        if (isPurchasesAvailable()) {
+          loadOfferings();
+        }
+      };
+      checkAndLoad();
     }, [])
   );
 
@@ -47,6 +67,11 @@ export default function CoinShopScreen() {
             const success = await buyCoinPackage(offering);
             if (success) {
               Alert.alert('購入完了！', `${pkg.coins}コインを獲得しました 🎉`);
+            } else {
+              const errMsg = usePurchaseStore.getState().error;
+              if (errMsg) {
+                Alert.alert('購入エラー', errMsg);
+              }
             }
           },
         },
@@ -54,27 +79,7 @@ export default function CoinShopScreen() {
     );
   };
 
-  // 開発用フォールバック（IAP未設定時）
-  const handleDevPurchase = (pkg: CoinPackage) => {
-    Alert.alert(
-      'コイン購入（開発モード）',
-      `${pkg.label}\n${pkg.coins}コインを¥${pkg.price}で購入しますか？\n\n⚠️ 実際の決済は行われません`,
-      [
-        { text: 'キャンセル', style: 'cancel' },
-        {
-          text: '購入する',
-          onPress: async () => {
-            try {
-              await purchase(pkg.coins, pkg.price);
-              Alert.alert('購入完了！', `${pkg.coins}コインを獲得しました 🎉`);
-            } catch (e: any) {
-              Alert.alert('エラー', e.message);
-            }
-          },
-        },
-      ]
-    );
-  };
+  // 開発用フォールバック削除済み - 本番ではStripe経由のみ
 
   // OCR枠の購入
   const handleQuotaPurchase = (pkg: OCRQuotaPackage) => {
@@ -108,14 +113,17 @@ export default function CoinShopScreen() {
           <Text style={styles.balanceAmount}>{balance.toLocaleString()}</Text>
           <Text style={styles.balanceUnit}>コイン</Text>
         </View>
-        <Text style={styles.balanceHint}>
-          レシート読み込み 1回 = {COIN_PER_SCAN}コイン
-        </Text>
         <View style={styles.quotaRow}>
-          <Text style={styles.quotaLabel}>📸 OCR枠残高</Text>
-          <Text style={styles.quotaAmount}>{ocrQuotaBalance}枠</Text>
+          <Text style={styles.quotaLabel}>📸 プランOCR残り</Text>
+          <Text style={styles.quotaAmount}>{ocrRemaining}回</Text>
         </View>
-        <Text style={styles.quotaHint}>プラン枠を超えたら自動で消費（翌月繰越）</Text>
+        {ocrQuotaBalance > 0 && (
+          <View style={styles.quotaRow}>
+            <Text style={styles.quotaLabel}>📦 追加OCR枠</Text>
+            <Text style={styles.quotaAmount}>{ocrQuotaBalance}枠</Text>
+          </View>
+        )}
+        <Text style={styles.quotaHint}>プラン枠を超えたら追加枠 → コインの順で消費</Text>
       </View>
 
       {/* コインパッケージ */}
@@ -159,38 +167,15 @@ export default function CoinShopScreen() {
                 </TouchableOpacity>
               );
             })
-          : /* 開発用フォールバック */
-            COIN_PACKAGES.map((pkg) => (
-              <TouchableOpacity
-                key={pkg.id}
-                style={[styles.packageCard, pkg.popular && styles.packageCardPopular]}
-                onPress={() => handleDevPurchase(pkg)}
-                activeOpacity={0.7}
-              >
-                {pkg.popular && (
-                  <View style={styles.popularBadge}>
-                    <Text style={styles.popularText}>人気</Text>
-                  </View>
-                )}
-                <Text style={styles.packageLabel}>{pkg.label}</Text>
-                <View style={styles.packageCoinRow}>
-                  <Text style={styles.packageCoinIcon}>🪙</Text>
-                  <Text style={styles.packageCoins}>{pkg.coins}</Text>
-                </View>
-                <Text style={styles.packagePrice}>¥{pkg.price}</Text>
-                <Text style={styles.packageUnit}>
-                  (1コイン ¥{(pkg.price / pkg.coins).toFixed(1)})
-                </Text>
-              </TouchableOpacity>
-            ))
+          : /* 読み込み中 or 初期化待ち */
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color={COLORS.primary} />
+              <Text style={styles.loadingText}>
+                {!iapAvailable ? '決済サービスを準備中...' : '商品情報を読み込み中...'}
+              </Text>
+            </View>
         }
       </View>
-
-      {!iapAvailable && (
-        <Text style={styles.devNote}>
-          ⚠️ 開発モード: 実際の決済は行われません
-        </Text>
-      )}
 
       {/* 取引履歴 */}
       <Text style={styles.sectionTitle}>📋 取引履歴</Text>
@@ -447,10 +432,14 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     marginTop: SPACING.sm,
   },
-  devNote: {
-    fontSize: FONT_SIZE.xs,
-    color: COLORS.warning || '#FF9800',
-    textAlign: 'center',
-    marginBottom: SPACING.md,
+  loadingContainer: {
+    alignItems: 'center',
+    padding: SPACING.xl,
+    width: '100%' as any,
+  },
+  loadingText: {
+    fontSize: FONT_SIZE.md,
+    color: COLORS.textSecondary,
+    marginTop: SPACING.sm,
   },
 });

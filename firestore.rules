@@ -1,0 +1,54 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ユーザードキュメント：本人のみ読み書き可能 + 書き込み制限
+    match /users/{userId} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow write: if request.auth != null && request.auth.uid == userId
+        // plan フィールドはクライアントから不正な値に変更できないようにする
+        && (!('plan' in request.resource.data) 
+            || request.resource.data.plan == resource.data.plan
+            || request.resource.data.plan in ['free', 'light', 'standard', 'premium'])
+        // 使用量カウンタは減少させられない（リセットはCloud Functions経由のみ）
+        && (!('ocrUsedThisMonth' in request.resource.data) 
+            || request.resource.data.ocrUsedThisMonth >= resource.data.ocrUsedThisMonth)
+        && (!('chatUsedThisMonth' in request.resource.data)
+            || request.resource.data.chatUsedThisMonth >= resource.data.chatUsedThisMonth)
+        // コイン残高は0以上を維持
+        && (!('coinBalance' in request.resource.data)
+            || request.resource.data.coinBalance >= 0)
+        // 追加購入枠は0以上を維持
+        && (!('ocrQuotaBalance' in request.resource.data)
+            || request.resource.data.ocrQuotaBalance >= 0)
+        && (!('chatQuotaBalance' in request.resource.data)
+            || request.resource.data.chatQuotaBalance >= 0);
+      
+      // サブコレクション（coinTransactions等）
+      match /{subcollection=**} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+
+    // シーズンスキャン統計：本人のみ読み書き可能 + 全ユーザー参照可能
+    match /seasonStats/{docId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null 
+        && request.resource.data.userId == request.auth.uid;
+    }
+
+    // 不正利用アラート：Cloud Functions のみ書き込み（クライアントは読み書き不可）
+    match /abuseAlerts/{alertId} {
+      allow read, write: if false;
+    }
+
+    // クーポン：Cloud Functions のみ操作（クライアントは読み書き不可）
+    match /coupons/{code} {
+      allow read, write: if false;
+    }
+
+    // その他のドキュメントはデフォルトで拒否
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

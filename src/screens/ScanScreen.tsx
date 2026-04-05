@@ -18,6 +18,7 @@ import { useScanStore, useExpenseStore, useAuthStore, useCoinStore, useUsageStor
 import { COLORS, SPACING, FONT_SIZE, BORDER_RADIUS, CATEGORIES, CATEGORY_MAP, PLAN_MAP, COIN_PER_SCAN } from '../constants';
 import { ExpenseCategory, ParsedReceipt } from '../types';
 import { useOCRQuota } from '../database/quota';
+import { decrementOCRQuotaFirestore } from '../services/firebase';
 
 export default function ScanScreen() {
   const [permission, requestPermission] = useCameraPermissions();
@@ -66,6 +67,10 @@ export default function ScanScreen() {
       try {
         const success = await useOCRQuota();
         if (success) {
+          // Firestoreの枠も消費
+          if (user) {
+            await decrementOCRQuotaFirestore(user.uid);
+          }
           await loadCoinData(); // 枠残高を更新
           await processImage(user.uid);
           return;

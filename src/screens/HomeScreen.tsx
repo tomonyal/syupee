@@ -8,6 +8,7 @@ import {
   Dimensions,
   ActivityIndicator,
   TouchableOpacity,
+  Alert,
 } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { PieChart } from 'react-native-chart-kit';
@@ -18,6 +19,8 @@ import { COLORS, SPACING, FONT_SIZE, BORDER_RADIUS, CATEGORY_MAP, COIN_PER_SCAN,
 import { PLAN_MAP } from '../constants';
 import { getDailyAdvice } from '../services/openai';
 import { getSeasonDisplayName } from '../utils';
+import { requestInitialCoins } from '../services/firebase';
+import * as Application from 'expo-application';
 
 const screenWidth = Dimensions.get('window').width;
 
@@ -31,7 +34,7 @@ export default function HomeScreen() {
     loadMonthlySummary,
   } = useExpenseStore();
 
-  const { user } = useAuthStore();
+  const { user, refresh } = useAuthStore();
   const { budget, loadBudget } = useBudgetStore();
   const { balance, ocrQuotaBalance, chatQuotaBalance, monthlyScans, seasonScans, rank, percentile, totalUsers, currentSeason, loadCoinData } = useCoinStore();
   const { ocrUsedThisMonth, chatUsedThisMonth, loadUsage } = useUsageStore();
@@ -39,6 +42,7 @@ export default function HomeScreen() {
   const [refreshing, setRefreshing] = React.useState(false);
   const [dailyAdvice, setDailyAdvice] = useState<string | null>(null);
   const [adviceLoading, setAdviceLoading] = useState(false);
+  const [requestingCoins, setRequestingCoins] = useState(false);
 
   const loadAdvice = useCallback(async () => {
     setAdviceLoading(true);
@@ -52,20 +56,37 @@ export default function HomeScreen() {
     }
   }, []);
 
+  const handleRequestInitialCoins = useCallback(async () => {
+    if (!user) return;
+    setRequestingCoins(true);
+    try {
+      const deviceId = await Application.getIosIdForVendorAsync() || 'unknown';
+      await requestInitialCoins(user.uid, deviceId);
+      await refresh();
+      Alert.alert('申請完了', '初回コインの申請を受け付けました。\nクーポンコードの発行をお待ちください。');
+    } catch (e: any) {
+      Alert.alert('エラー', e.message || '申請に失敗しました');
+    } finally {
+      setRequestingCoins(false);
+    }
+  }, [user]);
+
   useFocusEffect(
     useCallback(() => {
       loadRecentExpenses();
       loadMonthlySummary();
       loadBudget();
-      loadAdvice();
+      if (user?.plan !== 'free') {
+        loadAdvice();
+      }
       loadCoinData();
-      loadUsage();
-    }, [])
+      refresh().then(() => loadUsage());
+    }, [user?.plan])
   );
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([loadRecentExpenses(), loadMonthlySummary(), loadAdvice(), loadUsage()]);
+    await Promise.all([loadRecentExpenses(), loadMonthlySummary(), loadAdvice(), refresh().then(() => loadUsage())]);
     setRefreshing(false);
   };
 
@@ -95,6 +116,51 @@ export default function HomeScreen() {
       {/* 月選択 */}
       <MonthSelector currentMonth={selectedMonth} onMonthChange={setSelectedMonth} />
 
+      {/* 初回コインバナー */}
+      {user && (!user.initialCoinStatus || user.initialCoinStatus === 'none') && (
+        <TouchableOpacity
+          style={styles.initialCoinBanner}
+          activeOpacity={0.8}
+          onPress={handleRequestInitialCoins}
+          disabled={requestingCoins}
+        >
+          <Text style={styles.initialCoinIcon}>🎁</Text>
+          <View style={styles.initialCoinTextWrap}>
+            <Text style={styles.initialCoinTitle}>初回無料 310コイン</Text>
+            <Text style={styles.initialCoinSub}>タップして申請しよう！</Text>
+          </View>
+          {requestingCoins ? (
+            <ActivityIndicator size="small" color={COLORS.textOnPrimary} />
+          ) : (
+            <Ionicons name="chevron-forward" size={20} color={COLORS.textOnPrimary} />
+          )}
+        </TouchableOpacity>
+      )}
+      {user?.initialCoinStatus === 'requested' && (
+        <View style={[styles.initialCoinBanner, styles.initialCoinBannerPending]}>
+          <Text style={styles.initialCoinIcon}>⏳</Text>
+          <View style={styles.initialCoinTextWrap}>
+            <Text style={styles.initialCoinTitle}>クーポンコード要求中</Text>
+            <Text style={styles.initialCoinSub}>発行までしばらくお待ちください</Text>
+          </View>
+        </View>
+      )}
+      {user?.initialCoinStatus === 'issued' && user.initialCoinCouponCode && (
+        <TouchableOpacity
+          style={[styles.initialCoinBanner, styles.initialCoinBannerIssued]}
+          activeOpacity={0.8}
+          onPress={() => navigation.navigate('CouponRedeem')}
+        >
+          <Text style={styles.initialCoinIcon}>🎉</Text>
+          <View style={styles.initialCoinTextWrap}>
+            <Text style={styles.initialCoinTitle}>クーポンコード発行済み！</Text>
+            <Text style={styles.initialCoinCode}>{user.initialCoinCouponCode}</Text>
+            <Text style={styles.initialCoinSub}>タップして使う</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color="#fff" />
+        </TouchableOpacity>
+      )}
+
       {/* 月間サマリーカード（一番上） */}
       <TouchableOpacity
         activeOpacity={0.8}
@@ -123,17 +189,31 @@ export default function HomeScreen() {
           <Text style={styles.coinCardLabel}>コイン</Text>
         </TouchableOpacity>
 
-        <View style={[styles.rankCard, { borderColor: COLORS.border }]}>
-          <Text style={styles.rankCardIcon}>🏅</Text>
-          <Text style={[styles.rankCardLabel, { color: COLORS.textSecondary }]}>ランク</Text>
-          <Text style={[styles.rankCardScans, { color: COLORS.textSecondary, marginTop: 8 }]}>
-            開発中...
+        <TouchableOpacity
+          style={[styles.rankCard, { borderColor: COLORS.border }]}
+          activeOpacity={0.7}
+          onPress={() => Alert.alert('開発中です', 'ランク機能は現在開発中です。お楽しみに！')}
+        >
+          <Text style={styles.rankCardIcon}>{rank?.emoji || '🏅'}</Text>
+          <Text style={[styles.rankCardLabel, { color: COLORS.textSecondary }]}>
+            {rank?.name || 'ランク'}
           </Text>
-        </View>
+          <Text style={[styles.rankCardScans, { color: COLORS.textSecondary, marginTop: 4 }]}>
+            今月 {monthlyScans}回スキャン
+          </Text>
+        </TouchableOpacity>
       </View>
 
       {/* 今日のアドバイス */}
-      {(adviceLoading || dailyAdvice) && (
+      {user?.plan === 'free' ? (
+        <Card style={styles.adviceCard}>
+          <View style={styles.adviceHeader}>
+            <Text style={styles.adviceAvatar}>🐣</Text>
+            <Text style={styles.adviceTitle}>今日のアドバイス</Text>
+          </View>
+          <Text style={styles.advicePromo}>ライトプラン以上でAIがアドバイスしてくれます。</Text>
+        </Card>
+      ) : (adviceLoading || dailyAdvice) && (
         <Card style={styles.adviceCard}>
           <View style={styles.adviceHeader}>
             <Text style={styles.adviceAvatar}>🐣</Text>
@@ -183,7 +263,7 @@ export default function HomeScreen() {
                 style={[
                   styles.usageBarFill,
                   {
-                    width: `${(Math.min(ocrUsedThisMonth, planInfo.ocrLimit) / (planInfo.ocrLimit + ocrQuotaBalance)) * 100}%`,
+                    width: `${(planInfo.ocrLimit + ocrQuotaBalance) > 0 ? (Math.min(ocrUsedThisMonth, planInfo.ocrLimit) / (planInfo.ocrLimit + ocrQuotaBalance)) * 100 : 0}%`,
                     backgroundColor: '#2196F3',
                   },
                 ]}
@@ -193,13 +273,13 @@ export default function HomeScreen() {
                 style={[
                   styles.usageBarFill,
                   {
-                    width: `${((planInfo.ocrLimit - Math.min(ocrUsedThisMonth, planInfo.ocrLimit)) / (planInfo.ocrLimit + ocrQuotaBalance)) * 100}%`,
+                    width: `${(planInfo.ocrLimit + ocrQuotaBalance) > 0 ? ((planInfo.ocrLimit - Math.min(ocrUsedThisMonth, planInfo.ocrLimit)) / (planInfo.ocrLimit + ocrQuotaBalance)) * 100 : 0}%`,
                     backgroundColor: '#E0E0E0',
                   },
                 ]}
               />
               {/* 追加購入分の使用済み（オレンジ） */}
-              {ocrUsedThisMonth > planInfo.ocrLimit && (
+              {ocrUsedThisMonth > planInfo.ocrLimit && (planInfo.ocrLimit + ocrQuotaBalance) > 0 && (
                 <View
                   style={[
                     styles.usageBarFill,
@@ -247,7 +327,7 @@ export default function HomeScreen() {
                 style={[
                   styles.usageBarFill,
                   {
-                    width: `${(Math.min(chatUsedThisMonth, planInfo.chatLimit) / (planInfo.chatLimit + chatQuotaBalance)) * 100}%`,
+                    width: `${(planInfo.chatLimit + chatQuotaBalance) > 0 ? (Math.min(chatUsedThisMonth, planInfo.chatLimit) / (planInfo.chatLimit + chatQuotaBalance)) * 100 : 0}%`,
                     backgroundColor: '#4CAF50',
                   },
                 ]}
@@ -257,13 +337,13 @@ export default function HomeScreen() {
                 style={[
                   styles.usageBarFill,
                   {
-                    width: `${((planInfo.chatLimit - Math.min(chatUsedThisMonth, planInfo.chatLimit)) / (planInfo.chatLimit + chatQuotaBalance)) * 100}%`,
+                    width: `${(planInfo.chatLimit + chatQuotaBalance) > 0 ? ((planInfo.chatLimit - Math.min(chatUsedThisMonth, planInfo.chatLimit)) / (planInfo.chatLimit + chatQuotaBalance)) * 100 : 0}%`,
                     backgroundColor: '#E0E0E0',
                   },
                 ]}
               />
               {/* 追加購入分の使用済み（濃い緑） */}
-              {chatUsedThisMonth > planInfo.chatLimit && (
+              {chatUsedThisMonth > planInfo.chatLimit && (planInfo.chatLimit + chatQuotaBalance) > 0 && (
                 <View
                   style={[
                     styles.usageBarFill,
@@ -323,7 +403,16 @@ export default function HomeScreen() {
 
       {/* 最近の支出 */}
       <View style={styles.recentSection}>
-        <Text style={styles.sectionTitle}>🕐 最近の支出</Text>
+        <View style={styles.recentHeader}>
+          <Text style={styles.sectionTitle}>🕐 最近の支出</Text>
+          <TouchableOpacity
+            style={styles.manualAddButton}
+            onPress={() => navigation.navigate('EditExpense', {})}
+          >
+            <Ionicons name="add-circle" size={20} color={COLORS.primary} />
+            <Text style={styles.manualAddText}>手動追加</Text>
+          </TouchableOpacity>
+        </View>
         {recentExpenses.length === 0 ? (
           <EmptyState
             icon="receipt-outline"
@@ -454,6 +543,12 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     lineHeight: 22,
   },
+  advicePromo: {
+    fontSize: FONT_SIZE.md,
+    color: COLORS.textSecondary,
+    lineHeight: 22,
+    fontStyle: 'italic',
+  },
   adviceLoading: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -553,6 +648,62 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZE.xl,
     fontWeight: '700',
     color: COLORS.text,
+  },
+  recentHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     marginBottom: SPACING.md,
+  },
+  manualAddButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.xs,
+  },
+  manualAddText: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.primary,
+    fontWeight: '600',
+  },
+  initialCoinBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.primary,
+    borderRadius: BORDER_RADIUS.md,
+    padding: SPACING.md,
+    marginBottom: SPACING.md,
+  },
+  initialCoinBannerPending: {
+    backgroundColor: '#FF9800',
+  },
+  initialCoinBannerIssued: {
+    backgroundColor: '#4CAF50',
+  },
+  initialCoinIcon: {
+    fontSize: 28,
+    marginRight: SPACING.sm,
+  },
+  initialCoinTextWrap: {
+    flex: 1,
+  },
+  initialCoinTitle: {
+    fontSize: FONT_SIZE.md,
+    fontWeight: 'bold',
+    color: COLORS.textOnPrimary,
+  },
+  initialCoinSub: {
+    fontSize: FONT_SIZE.xs,
+    color: COLORS.textOnPrimary,
+    opacity: 0.85,
+    marginTop: 2,
+  },
+  initialCoinCode: {
+    fontSize: FONT_SIZE.lg,
+    fontWeight: 'bold',
+    color: '#fff',
+    letterSpacing: 2,
+    marginTop: 2,
   },
 });

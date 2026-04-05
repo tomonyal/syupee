@@ -1,0 +1,12 @@
+node_modules/
+.expo/
+dist/
+web-build/
+functions/
+firebase-debug.log
+*.jks
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+syupee-ebfaa-7c15a19bdf2d.json

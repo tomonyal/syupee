@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   Alert,
   Image,
+  Linking,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -16,8 +17,8 @@ import { exportCSV, importCSV } from '../utils/csv';
 import { COLORS, SPACING, FONT_SIZE, BORDER_RADIUS, PLAN_MAP } from '../constants';
 
 export default function SettingsScreen() {
-  const { user, signOut } = useAuthStore();
-  const { restore } = usePurchaseStore();
+  const { user, signOut, deleteAccount } = useAuthStore();
+  const { restore, cancelSubscription } = usePurchaseStore();
   const navigation = useNavigation<any>();
   const planInfo = user ? PLAN_MAP[user.plan] : null;
 
@@ -64,6 +65,70 @@ export default function SettingsScreen() {
     }
   };
 
+  const handleCancelSubscription = () => {
+    if (!user || user.plan === 'free') {
+      Alert.alert('確認', '現在フリープラン（無料）のため、解約は不要です。');
+      return;
+    }
+    Alert.alert(
+      'プランを解約',
+      `${planInfo?.label || ''}プランを解約し、フリープラン（無料）に戻りますか？\n\n現在の請求期間の終了後にダウングレードされます。`,
+      [
+        { text: 'キャンセル' },
+        {
+          text: '解約する',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const success = await cancelSubscription();
+              if (success) {
+                Alert.alert('完了', 'プランの解約手続きが完了しました。');
+              } else {
+                Alert.alert('エラー', '解約処理に失敗しました。');
+              }
+            } catch (error) {
+              Alert.alert('エラー', '解約処理に失敗しました。');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      'アカウント削除',
+      'この操作は取り消せません。すべてのデータが完全に削除されます。\n\n本当にアカウントを削除しますか？',
+      [
+        { text: 'キャンセル' },
+        {
+          text: '削除する',
+          style: 'destructive',
+          onPress: () => {
+            Alert.alert(
+              '最終確認',
+              '本当に削除してよろしいですか？',
+              [
+                { text: 'やめる' },
+                {
+                  text: '完全に削除',
+                  style: 'destructive',
+                  onPress: async () => {
+                    try {
+                      await deleteAccount();
+                    } catch (error) {
+                      Alert.alert('エラー', 'アカウント削除に失敗しました。');
+                    }
+                  },
+                },
+              ]
+            );
+          },
+        },
+      ]
+    );
+  };
+
   return (
     <ScrollView
       style={styles.screen}
@@ -94,10 +159,10 @@ export default function SettingsScreen() {
         <View style={styles.planBadge}>
           <Ionicons name="star" size={16} color={COLORS.accent} />
           <Text style={styles.planText}>
-            {planInfo?.label || 'ライト'}プラン
+            {planInfo?.label || 'フリー'}プラン
           </Text>
           <Text style={styles.planPrice}>
-            ¥{planInfo?.price.toLocaleString() || '200'}/月
+            {planInfo && planInfo.price > 0 ? `¥${planInfo.price.toLocaleString()}/月` : '無料'}
           </Text>
         </View>
       </Card>
@@ -109,6 +174,14 @@ export default function SettingsScreen() {
           label="プランを変更"
           onPress={() => navigation.navigate('PlanSelect')}
           showArrow
+        />
+        <SettingsRow
+          icon="close-circle-outline"
+          label="プランを解約"
+          subtitle="フリープラン（無料）に戻します"
+          onPress={handleCancelSubscription}
+          showArrow
+          destructive={user?.plan !== 'free'}
         />
         <SettingsRow
           icon="refresh-outline"
@@ -137,6 +210,20 @@ export default function SettingsScreen() {
           label="コインショップ"
           subtitle="コインを購入してレシートを読み込もう"
           onPress={() => navigation.navigate('CoinShop')}
+          showArrow
+        />
+        <SettingsRow
+          icon="ticket-outline"
+          label="クーポンコード"
+          subtitle="クーポンコードを入力してコインを受け取る"
+          onPress={() => navigation.navigate('CouponRedeem')}
+          showArrow
+        />
+        <SettingsRow
+          icon="add-circle-outline"
+          label="枠を追加購入"
+          subtitle="OCR・AI相談の枠をコインで購入"
+          onPress={() => navigation.navigate('QuotaPurchase')}
           showArrow
         />
       </SettingsSection>
@@ -169,14 +256,39 @@ export default function SettingsScreen() {
         <SettingsRow
           icon="document-text-outline"
           label="利用規約"
-          onPress={() => {}}
+          onPress={() => navigation.navigate('Terms')}
           showArrow
         />
         <SettingsRow
           icon="shield-outline"
           label="プライバシーポリシー"
-          onPress={() => {}}
+          onPress={() => navigation.navigate('Privacy')}
           showArrow
+        />
+        <SettingsRow
+          icon="mail-outline"
+          label="ご要望・お問い合わせ"
+          subtitle={user?.plan === 'free' ? 'ライトプラン以上でご利用いただけます' : undefined}
+          onPress={user?.plan === 'free'
+            ? () => Alert.alert('ライトプラン以上が必要です', 'ご要望・お問い合わせはライトプラン以上でご利用いただけます。', [
+                { text: 'キャンセル' },
+                { text: 'プラン変更', onPress: () => navigation.navigate('PlanSelect') },
+              ])
+            : () => Linking.openURL('mailto:tomonyal1224@gmail.com?subject=シュッピーへのご要望・お問い合わせ')
+          }
+          showArrow
+        />
+      </SettingsSection>
+
+      {/* アカウント削除 */}
+      <SettingsSection title="⚠️ アカウント">
+        <SettingsRow
+          icon="trash-outline"
+          label="アカウントを削除"
+          subtitle="すべてのデータが完全に削除されます"
+          onPress={handleDeleteAccount}
+          showArrow
+          destructive
         />
       </SettingsSection>
 
@@ -218,6 +330,7 @@ function SettingsRow({
   value,
   onPress,
   showArrow,
+  destructive,
 }: {
   icon: string;
   label: string;
@@ -225,19 +338,21 @@ function SettingsRow({
   value?: string;
   onPress?: () => void;
   showArrow?: boolean;
+  destructive?: boolean;
 }) {
   const Wrapper = onPress ? TouchableOpacity : View;
+  const iconColor = destructive ? '#E53935' : COLORS.primary;
 
   return (
     <Wrapper style={styles.settingsRow} onPress={onPress}>
       <Ionicons
         name={icon as any}
         size={22}
-        color={COLORS.primary}
+        color={iconColor}
         style={styles.rowIcon}
       />
       <View style={styles.rowContent}>
-        <Text style={styles.rowLabel}>{label}</Text>
+        <Text style={[styles.rowLabel, destructive && { color: '#E53935' }]}>{label}</Text>
         {subtitle && <Text style={styles.rowSubtitle}>{subtitle}</Text>}
       </View>
       {value && <Text style={styles.rowValue}>{value}</Text>}

@@ -12,7 +12,7 @@ import { useRoute, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { Button, Card } from '../components';
 import { useExpenseStore } from '../store';
-import { getExpenseById, updateExpense, updateExpenseItems } from '../database';
+import { getExpenseById, updateExpense, updateExpenseItems, insertExpense } from '../database';
 import { Expense, ExpenseCategory, ExpenseItem } from '../types';
 import { COLORS, SPACING, FONT_SIZE, BORDER_RADIUS, CATEGORIES } from '../constants';
 
@@ -57,16 +57,27 @@ export default function EditExpenseScreen() {
 
   const loadExpense = async () => {
     const expenseId = route.params?.expenseId;
-    if (!expenseId) return;
+    const parsedReceipt = route.params?.parsedReceipt;
 
-    const expense = await getExpenseById(expenseId);
-    if (expense) {
-      setStoreName(expense.storeName);
-      setDate(expense.date);
-      setAmount(String(expense.amount));
-      setCategory(expense.category);
-      setMemo(expense.memo);
-      setItems(expense.items.map((item) => ({ ...item, category: item.category ?? expense.category })));
+    if (expenseId) {
+      const expense = await getExpenseById(expenseId);
+      if (expense) {
+        setStoreName(expense.storeName);
+        setDate(expense.date);
+        setAmount(String(expense.amount));
+        setCategory(expense.category);
+        setMemo(expense.memo);
+        setItems(expense.items.map((item) => ({ ...item, category: item.category ?? expense.category })));
+      }
+    } else if (parsedReceipt) {
+      setStoreName(parsedReceipt.storeName || '');
+      setDate(parsedReceipt.date || new Date().toISOString().split('T')[0]);
+      setAmount(String(parsedReceipt.totalAmount || 0));
+      setCategory(parsedReceipt.suggestedCategory || 'other');
+      setItems(parsedReceipt.items || []);
+    } else {
+      // 新規手動入力: 今日の日付をセット
+      setDate(new Date().toISOString().split('T')[0]);
     }
   };
 
@@ -96,10 +107,23 @@ export default function EditExpenseScreen() {
             category: item.category ?? resolvedCategory,
           }))
         );
+      } else {
+        // 新規作成
+        await insertExpense({
+          storeName,
+          date: date || new Date().toISOString().split('T')[0],
+          amount: Number(amount),
+          category: resolvedCategory,
+          memo,
+          items: items.map((item) => ({
+            ...item,
+            category: item.category ?? resolvedCategory,
+          })),
+        });
       }
 
       await Promise.all([loadRecentExpenses(), loadMonthlySummary(), loadFilteredExpenses()]);
-      Alert.alert('保存完了', '支出を更新しました');
+      Alert.alert('保存完了', expenseId ? '支出を更新しました' : '支出を追加しました');
       navigation.goBack();
     } catch (error) {
       Alert.alert('エラー', '保存に失敗しました');
@@ -147,7 +171,7 @@ export default function EditExpenseScreen() {
       </Card>
 
       {/* カテゴリ */}
-      <Card title="🏷️ カテゴリ" style={styles.categoryCard}>
+      <Card title="🏷️ カテゴリ（一括設定）" style={styles.categoryCard}>
         <View style={styles.categoryGrid}>
           {CATEGORIES.map((cat) => (
             <TouchableOpacity
@@ -156,7 +180,11 @@ export default function EditExpenseScreen() {
                 styles.categoryItem,
                 category === cat.key && { backgroundColor: cat.color + '20', borderColor: cat.color },
               ]}
-              onPress={() => setCategory(cat.key)}
+              onPress={() => {
+                setCategory(cat.key);
+                // 全明細のカテゴリも一括変更
+                setItems(prev => prev.map(item => ({ ...item, category: cat.key })));
+              }}
             >
               <Ionicons
                 name={(cat.icon as any)}

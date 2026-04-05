@@ -73,11 +73,19 @@ export interface User {
   plan: SubscriptionPlan;
   ocrUsedThisMonth: number;
   chatUsedThisMonth: number;
+  ocrQuotaBalance: number;
+  chatQuotaBalance: number;
   planResetDate: string;
+  initialCoinStatus?: InitialCoinStatus;
+  initialCoinCouponCode?: string;
+  deviceId?: string;
 }
 
+// 初回コインステータス
+export type InitialCoinStatus = 'none' | 'requested' | 'issued' | 'redeemed';
+
 // サブスクリプションプラン
-export type SubscriptionPlan = 'light' | 'standard' | 'premium';
+export type SubscriptionPlan = 'free' | 'light' | 'standard' | 'premium';
 
 // コインパッケージ
 export interface CoinPackage {
@@ -225,4 +233,7 @@ export type RootStackParamList = {
   CoinShop: undefined;
   QuotaPurchase: undefined;
   RankDetail: undefined;
+  Terms: undefined;
+  Privacy: undefined;
+  CouponRedeem: undefined;
 };

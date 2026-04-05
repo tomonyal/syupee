@@ -22,9 +22,17 @@ export const CATEGORY_MAP: Record<ExpenseCategory, CategoryInfo> = Object.fromEn
 // プラン定義
 export const PLANS: PlanInfo[] = [
   {
+    key: 'free',
+    label: 'フリー',
+    price: 0,
+    ocrLimit: 0,
+    chatLimit: 0,
+    description: '無料でお試し',
+  },
+  {
     key: 'light',
     label: 'ライト',
-    price: 200,
+    price: 300,
     ocrLimit: 30,
     chatLimit: 10,
     description: 'お気軽に始めたい方に',
@@ -32,7 +40,7 @@ export const PLANS: PlanInfo[] = [
   {
     key: 'standard',
     label: 'スタンダード',
-    price: 500,
+    price: 600,
     ocrLimit: 100,
     chatLimit: 50,
     description: '日常的に使いたい方に',
@@ -40,7 +48,7 @@ export const PLANS: PlanInfo[] = [
   {
     key: 'premium',
     label: 'プレミアム',
-    price: 1000,
+    price: 1200,
     ocrLimit: 300,
     chatLimit: 500,
     description: '本気で節約したい方に',
@@ -59,10 +67,10 @@ export const ADVICE_MONTHS = 3;
 
 // コインパッケージ定義
 export const COIN_PACKAGES: CoinPackage[] = [
-  { id: 'coin_100', coins: 100, price: 120, label: 'おためし', popular: true },
-  { id: 'coin_300', coins: 300, price: 320, label: 'お得パック' },
-  { id: 'coin_500', coins: 500, price: 480, label: 'たっぷりパック' },
-  { id: 'coin_1000', coins: 1000, price: 900, label: 'プレミアムパック' },
+  { id: 'coin_100', coins: 100, price: 200, label: 'おためし', popular: true },
+  { id: 'coin_300', coins: 300, price: 500, label: 'お得パック' },
+  { id: 'coin_500', coins: 500, price: 700, label: 'たっぷりパック' },
+  { id: 'coin_1000', coins: 1000, price: 1200, label: 'プレミアムパック' },
 ];
 
 // コインパッケージIDからコイン数を引くマップ

@@ -79,10 +79,10 @@ export async function carryOverQuota(): Promise<void> {
   const db = await getDatabase();
   const currentMonth = getCurrentMonth();
   
-  // 前月を計算
-  const date = new Date();
-  date.setMonth(date.getMonth() - 1);
-  const lastMonth = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+  // 前月を計算（年跨ぎ対応）
+  const now = new Date();
+  const priorDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const lastMonth = `${priorDate.getFullYear()}-${String(priorDate.getMonth() + 1).padStart(2, '0')}`;
 
   const lastMonthRow = await db.getFirstAsync<{ quota_remaining: number }>(
     'SELECT quota_remaining FROM ocr_quota_balance WHERE month = ?',
@@ -202,10 +202,10 @@ export async function carryOverChatQuota(): Promise<void> {
   const db = await getDatabase();
   const currentMonth = getCurrentMonth();
   
-  // 前月を計算
-  const date = new Date();
-  date.setMonth(date.getMonth() - 1);
-  const lastMonth = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+  // 前月を計算（年跨ぎ対応）
+  const now = new Date();
+  const priorDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const lastMonth = `${priorDate.getFullYear()}-${String(priorDate.getMonth() + 1).padStart(2, '0')}`;
 
   const lastMonthRow = await db.getFirstAsync<{ quota_remaining: number }>(
     'SELECT quota_remaining FROM chat_quota_balance WHERE month = ?',

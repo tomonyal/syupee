@@ -33,6 +33,7 @@ export async function parseReceiptText(ocrText: string): Promise<ParsedReceipt> 
 - 金額は数値のみ（円記号なし）
 - 小計・税込合計があれば税込金額を使う
 - **重要**: すべての明細（items）に必ず最適なcategoryを個別に割り当ててください。商品名から判断し、食品なら"food"、洗剤なら"daily_necessities"など、1つずつ適切なカテゴリキーを設定すること
+- **重要**: 割引・値引き行（例: 割引 20% -110、値引 -50、クーポン -100 など）は独立した商品ではありません。直前の商品のpriceから割引額を差し引いた金額をその商品のpriceとしてください。例: 商品548円、割引-110円 → price: 438
 - suggestedCategoryはレシート全体の主要カテゴリを設定
 - 合計金額は明細の合計と整合性を取る`;
 
@@ -51,11 +52,11 @@ export async function parseReceiptText(ocrText: string): Promise<ParsedReceipt> 
       date: parsed.date || new Date().toISOString().split('T')[0],
       items: (parsed.items || []).map((item: any) => ({
         name: item.name || '',
-        price: Number(item.price) || 0,
-        quantity: Number(item.quantity) || 1,
+        price: Math.max(0, Number(item.price) || 0),
+        quantity: Math.max(1, Number(item.quantity) || 1),
         category: validateCategory(item.category || suggestedCategory),
-      })),
-      totalAmount: Number(parsed.totalAmount) || 0,
+      })).filter((item: any) => item.price > 0),
+      totalAmount: Math.max(0, Number(parsed.totalAmount) || 0),
       suggestedCategory,
     };
   } catch (error) {
@@ -122,13 +123,30 @@ ${expenseContext}
       };
     });
 
-    // 合計が予算と一致するよう調整
+    // 合計が予算と一致するよう調整（100円単位で丸め）
     const currentTotal = result.reduce((sum, r) => sum + r.amount, 0);
-    const diff = totalBudget - currentTotal;
+    let diff = totalBudget - currentTotal;
     if (diff !== 0 && result.length > 0) {
-      // 最大カテゴリで調整
-      const maxIdx = result.reduce((mi, r, i, arr) => (r.amount > arr[mi].amount ? i : mi), 0);
-      result[maxIdx].amount += diff;
+      // 差分を100円単位で分配（最大カテゴリから順に調整）
+      const sortedIndices = result
+        .map((r, i) => ({ i, amount: r.amount }))
+        .sort((a, b) => b.amount - a.amount)
+        .map((x) => x.i);
+      const step = diff > 0 ? 100 : -100;
+      let idx = 0;
+      while (diff !== 0 && idx < sortedIndices.length) {
+        const si = sortedIndices[idx % sortedIndices.length];
+        if (result[si].amount + step >= 0) {
+          result[si].amount += step;
+          diff -= step;
+        }
+        idx++;
+      }
+      // 端数が残った場合は最大カテゴリで吸収
+      if (diff !== 0) {
+        const maxIdx = sortedIndices[0];
+        result[maxIdx].amount += diff;
+      }
     }
 
     return result;
@@ -292,11 +310,15 @@ async function callGemini(
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+
     const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
+      signal: controller.signal,
       body: JSON.stringify({
         system_instruction: {
           parts: [{ text: systemInstruction }],
@@ -359,8 +381,10 @@ async function callGemini(
       throw new Error('Gemini APIから応答が得られませんでした');
     }
 
+    clearTimeout(timeoutId);
     return text;
   } catch (error: any) {
+    clearTimeout(timeoutId);
     // ネットワークエラーなどの場合もリトライ
     if (retryCount < MAX_RETRIES && error.message.includes('fetch')) {
       const delay = BASE_DELAY * Math.pow(2, retryCount);

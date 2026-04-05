@@ -13,7 +13,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Card, Button } from '../components';
 import { useAuthStore, usePurchaseStore } from '../store';
-import { updatePlan } from '../services/firebase';
 import { isPurchasesAvailable, PlanOffering } from '../services/purchases';
 import { COLORS, SPACING, FONT_SIZE, BORDER_RADIUS, PLANS } from '../constants';
 import { SubscriptionPlan } from '../types';
@@ -22,13 +21,25 @@ export default function PlanSelectScreen() {
   const navigation = useNavigation();
   const { user, refresh, setUser } = useAuthStore();
   const { planOfferings, isPurchasing, isLoadingOfferings, buyPlanSubscription, restore, loadOfferings } = usePurchaseStore();
-  const iapAvailable = isPurchasesAvailable();
+  const [iapAvailable, setIapAvailable] = React.useState(isPurchasesAvailable());
 
   useFocusEffect(
     useCallback(() => {
-      if (iapAvailable) {
-        loadOfferings();
-      }
+      const checkAndLoad = async () => {
+        for (let i = 0; i < 10; i++) {
+          if (isPurchasesAvailable()) {
+            setIapAvailable(true);
+            loadOfferings();
+            return;
+          }
+          await new Promise(r => setTimeout(r, 500));
+        }
+        setIapAvailable(isPurchasesAvailable());
+        if (isPurchasesAvailable()) {
+          loadOfferings();
+        }
+      };
+      checkAndLoad();
     }, [])
   );
 
@@ -53,6 +64,11 @@ export default function PlanSelectScreen() {
             if (success) {
               Alert.alert('完了', 'プランを変更しました 🎉');
               navigation.goBack();
+            } else {
+              const errMsg = usePurchaseStore.getState().error;
+              if (errMsg) {
+                Alert.alert('購入エラー', errMsg);
+              }
             }
           },
         },
@@ -60,35 +76,7 @@ export default function PlanSelectScreen() {
     );
   };
 
-  // 開発用フォールバック
-  const handleDevPurchase = async (planKey: SubscriptionPlan) => {
-    if (!user) return;
-    if (user.plan === planKey) {
-      Alert.alert('現在のプラン', 'すでにこのプランをご利用中です');
-      return;
-    }
-
-    Alert.alert(
-      'プラン変更（開発モード）',
-      `プランを変更しますか？\n\n⚠️ 実際の決済は行われません`,
-      [
-        { text: 'キャンセル' },
-        {
-          text: '変更する',
-          onPress: async () => {
-            try {
-              await updatePlan(user.uid, planKey);
-              setUser({ ...user, plan: planKey });
-              Alert.alert('完了', 'プランを変更しました 🎉');
-              navigation.goBack();
-            } catch (error) {
-              Alert.alert('エラー', 'プラン変更に失敗しました');
-            }
-          },
-        },
-      ]
-    );
-  };
+  // 開発用フォールバック削除済み - 本番ではStripe経由のみ
 
   // 購入復元
   const handleRestore = async () => {
@@ -103,15 +91,15 @@ export default function PlanSelectScreen() {
   };
 
   const handleSelectPlan = (planKey: SubscriptionPlan) => {
-    if (iapAvailable) {
-      const offering = planOfferings.find((o) => o.planKey === planKey);
-      if (offering) {
-        handleIAPPurchase(planKey, offering);
-      } else {
-        handleDevPurchase(planKey);
-      }
+    if (!iapAvailable) {
+      Alert.alert('準備中', '決済サービスの初期化中です。しばらくお待ちください。');
+      return;
+    }
+    const offering = planOfferings.find((o) => o.planKey === planKey);
+    if (offering) {
+      handleIAPPurchase(planKey, offering);
     } else {
-      handleDevPurchase(planKey);
+      Alert.alert('エラー', 'プラン情報の取得に失敗しました。画面を開き直してください。');
     }
   };
 
@@ -127,7 +115,7 @@ export default function PlanSelectScreen() {
         </View>
       )}
 
-      {PLANS.map((plan, idx) => {
+      {PLANS.filter((plan) => plan.key !== 'free').map((plan, idx) => {
         const isCurrentPlan = user?.plan === plan.key;
         const isRecommended = plan.key === 'standard';
         const iapPrice = getPriceForPlan(plan.key);
@@ -199,15 +187,10 @@ export default function PlanSelectScreen() {
       </TouchableOpacity>
 
       <Text style={styles.note}>
-        ※ 決済はApp Store / Google Playのサブスクリプションで処理されます。{'\n'}
+        ※ 決済はStripeのセキュアな決済システムで処理されます。{'\n'}
         ※ 無料期間中にキャンセルすれば料金は発生しません。
       </Text>
 
-      {!iapAvailable && (
-        <Text style={styles.devNote}>
-          ⚠️ 開発モード: 実際の決済は行われません
-        </Text>
-      )}
     </ScrollView>
   );
 }
@@ -352,11 +335,5 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZE.md,
     color: COLORS.primary,
     fontWeight: '600',
-  },
-  devNote: {
-    fontSize: FONT_SIZE.xs,
-    color: '#FF9800',
-    textAlign: 'center',
-    marginTop: SPACING.md,
   },
 });

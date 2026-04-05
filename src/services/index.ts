@@ -10,6 +10,8 @@ export {
   purchaseCoinPackage,
   purchasePlanSubscription,
   getCurrentPlan,
-  getPlanFromCustomerInfo,
+  getPlanFromPurchaseResult,
   restorePurchases,
+  cancelSubscription,
+  getCustomerPortalUrl,
 } from './purchases';

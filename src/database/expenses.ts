@@ -166,7 +166,7 @@ export async function getMonthlySummary(month: string): Promise<MonthlySummary> 
     [month]
   );
 
-  const totalAmount = totalResult?.total ?? 0;
+  let totalAmount = totalResult?.total ?? 0;
   const expenses = await getExpenses({ month });
   const breakdownMap = new Map<ExpenseCategory, { amount: number; count: number }>();
 
@@ -194,6 +194,10 @@ export async function getMonthlySummary(month: string): Promise<MonthlySummary> 
   }
 
   const breakdownTotal = Array.from(breakdownMap.values()).reduce((sum, row) => sum + row.amount, 0);
+  // 明細合計とDB合計に乖離がある場合、明細合計を正とする
+  if (breakdownTotal > 0 && breakdownTotal !== totalAmount) {
+    totalAmount = breakdownTotal;
+  }
   const percentageBase = breakdownTotal > 0 ? breakdownTotal : totalAmount;
 
   const categoryBreakdown: CategoryBreakdown[] = Array.from(breakdownMap.entries())

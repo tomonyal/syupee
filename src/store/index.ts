@@ -3,9 +3,14 @@ import { User, Expense, MonthlySummary, ChatMessage, MonthlyBudget, CategoryBudg
 import {
   signInWithGoogle,
   signOut as firebaseSignOut,
+  deleteAccount as firebaseDeleteAccount,
   refreshUser,
   incrementOCRUsage,
   incrementChatUsage,
+  incrementOCRQuotaFirestore,
+  incrementChatQuotaFirestore,
+  decrementOCRQuotaFirestore,
+  decrementChatQuotaFirestore,
   updatePlan,
 } from '../services/firebase';
 import {
@@ -55,8 +60,9 @@ import {
   purchaseCoinPackage,
   purchasePlanSubscription,
   getCurrentPlan,
-  getPlanFromCustomerInfo,
+  getPlanFromPurchaseResult,
   restorePurchases,
+  cancelSubscription as stripeCancelSubscription,
   CoinOffering,
   PlanOffering,
 } from '../services/purchases';
@@ -76,6 +82,7 @@ interface AuthState {
   isAuthenticated: boolean;
   signIn: () => Promise<void>;
   signOut: () => Promise<void>;
+  deleteAccount: () => Promise<void>;
   refresh: () => Promise<void>;
   setUser: (user: User | null) => void;
 }
@@ -91,7 +98,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const user = await signInWithGoogle();
       set({ user, isAuthenticated: true, isLoading: false });
 
-      // RevenueCat初期化 & ユーザー紐づけ
+      // Stripe初期化 & ユーザー紐づけ
       await initializePurchases(user.uid);
       await loginPurchaseUser(user.uid);
 
@@ -113,6 +120,26 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       await logoutPurchaseUser();
       await firebaseSignOut();
+      set({ user: null, isAuthenticated: false, isLoading: false });
+    } catch (error) {
+      set({ isLoading: false });
+      throw error;
+    }
+  },
+
+  deleteAccount: async () => {
+    const { user } = get();
+    if (!user) throw new Error('ユーザーが見つかりません');
+    set({ isLoading: true });
+    try {
+      // サブスクがあればキャンセル
+      if (user.plan !== 'free') {
+        try { await stripeCancelSubscription(); } catch (e) {
+          console.warn('[Account] サブスク解約失敗（続行）:', e);
+        }
+      }
+      await logoutPurchaseUser();
+      await firebaseDeleteAccount(user.uid);
       set({ user: null, isAuthenticated: false, isLoading: false });
     } catch (error) {
       set({ isLoading: false });
@@ -241,6 +268,17 @@ export const useUsageStore = create<UsageState>((set) => ({
   loadUsage: async () => {
     set({ isLoading: true });
     try {
+      // Firestoreのユーザーデータを優先（サーバー側の信頼できる値）
+      const user = useAuthStore.getState().user;
+      if (user) {
+        set({
+          ocrUsedThisMonth: user.ocrUsedThisMonth || 0,
+          chatUsedThisMonth: user.chatUsedThisMonth || 0,
+          isLoading: false,
+        });
+        return;
+      }
+      // フォールバック: ローカルDB
       const usage = await getMonthlyUsage();
       set({
         ocrUsedThisMonth: usage.ocrCount,
@@ -254,8 +292,9 @@ export const useUsageStore = create<UsageState>((set) => ({
 
   incrementOCR: async () => {
     try {
-      const newCount = await incrementLocalOCRUsage();
-      set({ ocrUsedThisMonth: newCount });
+      await incrementLocalOCRUsage();
+      // Storeの値を+1（Firestoreのincrement()と同期）
+      set((state) => ({ ocrUsedThisMonth: state.ocrUsedThisMonth + 1 }));
     } catch {
       // エラーは無視
     }
@@ -263,8 +302,9 @@ export const useUsageStore = create<UsageState>((set) => ({
 
   incrementChat: async () => {
     try {
-      const newCount = await incrementLocalChatUsage();
-      set({ chatUsedThisMonth: newCount });
+      await incrementLocalChatUsage();
+      // Storeの値を+1（Firestoreのincrement()と同期）
+      set((state) => ({ chatUsedThisMonth: state.chatUsedThisMonth + 1 }));
     } catch {
       // エラーは無視
     }
@@ -524,13 +564,18 @@ export const useCoinStore = create<CoinState>((set, get) => ({
       // 月次ランクリセット処理（前月の報酬を付与）
       const rankResetResult = await processMonthlyRankReset();
       
-      const [balance, transactions, monthlyScans, ocrQuotaBalance, chatQuotaBalance] = await Promise.all([
+      const [balance, transactions, monthlyScans, localOcrQuota, localChatQuota] = await Promise.all([
         getCoinBalance(),
         getCoinTransactions(50),
         getMonthlyScansCount(),
         getOCRQuotaBalance(),
         getChatQuotaBalance(),
       ]);
+
+      // Firestore値を優先（AuthStoreのuserから取得）
+      const { user } = useAuthStore.getState();
+      const ocrQuotaBalance = user?.ocrQuotaBalance ?? localOcrQuota;
+      const chatQuotaBalance = user?.chatQuotaBalance ?? localChatQuota;
       
       set({
         balance,
@@ -590,9 +635,14 @@ export const useCoinStore = create<CoinState>((set, get) => ({
     }
     set({ isLoading: true, error: null });
     try {
-      // コインを消費して枠を購入
+      // コインを消費して枠を購入（ローカル）
       await useCoinsForScan(coinCost);
       await purchaseOCRQuota(quota, coinCost);
+      // Firestoreにも枠を加算
+      const { user } = useAuthStore.getState();
+      if (user) {
+        await incrementOCRQuotaFirestore(user.uid, quota);
+      }
       await get().loadCoinData();
     } catch (error: any) {
       set({ isLoading: false, error: error.message });
@@ -607,9 +657,14 @@ export const useCoinStore = create<CoinState>((set, get) => ({
     }
     set({ isLoading: true, error: null });
     try {
-      // コインを消費して枠を購入
+      // コインを消費して枠を購入（ローカル）
       await useCoinsForScan(coinCost);
       await purchaseChatQuota(quota, coinCost);
+      // Firestoreにも枠を加算
+      const { user } = useAuthStore.getState();
+      if (user) {
+        await incrementChatQuotaFirestore(user.uid, quota);
+      }
       await get().loadCoinData();
     } catch (error: any) {
       set({ isLoading: false, error: error.message });
@@ -666,6 +721,7 @@ interface PurchaseState {
   loadOfferings: () => Promise<void>;
   buyCoinPackage: (offering: CoinOffering) => Promise<boolean>;
   buyPlanSubscription: (offering: PlanOffering) => Promise<boolean>;
+  cancelSubscription: () => Promise<boolean>;
   restore: () => Promise<void>;
 }
 
@@ -710,14 +766,10 @@ export const usePurchaseStore = create<PurchaseState>((set, get) => ({
         return false;
       }
 
-      // 決済成功 → パッケージIDからコイン数を特定してローカルDBに付与
-      const coinPkg = COIN_PACKAGES.find((p) =>
-        offering.packageId === p.id
-      );
-      if (coinPkg) {
-        await purchaseCoins(coinPkg.coins, offering.price);
-        await useCoinStore.getState().loadCoinData();
-      }
+      // 決済成功 → Webhookがコイン付与するので残高をリロード
+      // Webhookの処理に少し時間がかかるため短い待機
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      await useCoinStore.getState().loadCoinData();
 
       set({ isPurchasing: false });
       return true;
@@ -742,9 +794,9 @@ export const usePurchaseStore = create<PurchaseState>((set, get) => ({
         return false;
       }
 
-      // 決済成功 → CustomerInfoからプランを判定してユーザー情報を更新
-      if (result.customerInfo) {
-        const newPlan = getPlanFromCustomerInfo(result.customerInfo);
+      // 決済成功 → PurchaseResultからプランを判定してユーザー情報を更新
+      if (result.plan) {
+        const newPlan = result.plan;
         const user = useAuthStore.getState().user;
         if (user) {
           useAuthStore.getState().setUser({ ...user, plan: newPlan });
@@ -772,6 +824,25 @@ export const usePurchaseStore = create<PurchaseState>((set, get) => ({
       set({ isPurchasing: false });
     } catch (error: any) {
       set({ isPurchasing: false, error: error.message });
+    }
+  },
+
+  cancelSubscription: async () => {
+    set({ isPurchasing: true, error: null });
+    try {
+      const success = await stripeCancelSubscription();
+      if (success) {
+        const user = useAuthStore.getState().user;
+        if (user) {
+          useAuthStore.getState().setUser({ ...user, plan: 'free' });
+          await updatePlan(user.uid, 'free');
+        }
+      }
+      set({ isPurchasing: false });
+      return success;
+    } catch (error: any) {
+      set({ isPurchasing: false, error: error.message });
+      return false;
     }
   },
 }));

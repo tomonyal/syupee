@@ -9,4 +9,5 @@ dist/
 *.orig.*
 web-build/
 .env
-syupee-ebfaa-7c15a19bdf2d.json
+syupee-ebfaa-*.json
+auth_export.json

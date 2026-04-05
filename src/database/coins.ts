@@ -2,36 +2,49 @@ import { getDatabase } from './connection';
 import { CoinTransaction, MonthlyRankHistory, UserRank } from '../types';
 import { v4Generator as generateUUID } from '../utils/uuid';
 import { getRankFromScans, RANK_MAP } from '../constants';
+import {
+  getFirestoreCoinBalance,
+  addFirestoreCoinTransaction,
+  getFirestoreCoinTransactions,
+} from '../services/firebase';
 
-/**
- * コイン残高を取得
- */
-export async function getCoinBalance(): Promise<number> {
-  const db = await getDatabase();
-  const result = await db.getFirstAsync<{ total: number }>(
-    `SELECT COALESCE(SUM(amount), 0) as total FROM coin_transactions`
-  );
-  return result?.total ?? 0;
+// 現在ログイン中のユーザーUIDを取得するヘルパー
+function getCurrentUid(): string | null {
+  try {
+    const { getCurrentFirebaseUser } = require('../services/firebase');
+    const user = getCurrentFirebaseUser();
+    return user?.uid || null;
+  } catch {
+    return null;
+  }
 }
 
 /**
- * コイン取引を追加
+ * コイン残高を取得（Firestore）
+ */
+export async function getCoinBalance(): Promise<number> {
+  const uid = getCurrentUid();
+  if (!uid) return 0;
+  return getFirestoreCoinBalance(uid);
+}
+
+/**
+ * コイン取引を追加（Firestore）
  */
 export async function addCoinTransaction(
   type: 'purchase' | 'use' | 'bonus',
   amount: number,
   description: string
 ): Promise<CoinTransaction> {
-  const db = await getDatabase();
-  const id = generateUUID();
-  const now = new Date().toISOString();
-
-  await db.runAsync(
-    `INSERT INTO coin_transactions (id, type, amount, description, created_at) VALUES (?, ?, ?, ?, ?)`,
-    [id, type, amount, description, now]
-  );
-
-  return { id, type, amount, description, createdAt: now };
+  const uid = getCurrentUid();
+  if (!uid) {
+    throw new Error('ログインが必要です');
+  }
+  const tx = await addFirestoreCoinTransaction(uid, type, amount, description);
+  if (!tx) {
+    throw new Error('コイン取引の記録に失敗しました');
+  }
+  return tx;
 }
 
 /**
@@ -60,28 +73,12 @@ export async function addBonusCoins(amount: number, reason: string): Promise<Coi
 }
 
 /**
- * コイン取引履歴を取得
+ * コイン取引履歴を取得（Firestore）
  */
 export async function getCoinTransactions(limit: number = 50): Promise<CoinTransaction[]> {
-  const db = await getDatabase();
-  const rows = await db.getAllAsync<{
-    id: string;
-    type: string;
-    amount: number;
-    description: string;
-    created_at: string;
-  }>(
-    `SELECT * FROM coin_transactions ORDER BY created_at DESC LIMIT ?`,
-    [limit]
-  );
-
-  return rows.map((row) => ({
-    id: row.id,
-    type: row.type as 'purchase' | 'use' | 'bonus',
-    amount: row.amount,
-    description: row.description,
-    createdAt: row.created_at,
-  }));
+  const uid = getCurrentUid();
+  if (!uid) return [];
+  return getFirestoreCoinTransactions(uid, limit);
 }
 
 /**

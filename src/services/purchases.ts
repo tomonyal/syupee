@@ -1,40 +1,33 @@
-import Purchases, {
-  PurchasesOffering,
-  PurchasesPackage,
-  CustomerInfo,
-  LOG_LEVEL,
-  PURCHASES_ERROR_CODE,
-} from 'react-native-purchases';
-import { Platform } from 'react-native';
+import {
+  initPaymentSheet,
+  presentPaymentSheet,
+} from '@stripe/stripe-react-native';
 import { SubscriptionPlan } from '../types';
+import { STRIPE_CONFIG } from './config';
+import { isFirebaseAvailable, getCurrentFirebaseUser } from './firebase';
 
 // ============================
-// RevenueCat設定
+// Stripe設定
 // ============================
 
-// RevenueCat APIキー（.env に設定してください）
-const REVENUECAT_API_KEY_IOS = process.env.EXPO_PUBLIC_REVENUECAT_API_KEY_IOS || '';
-const REVENUECAT_API_KEY_ANDROID = process.env.EXPO_PUBLIC_REVENUECAT_API_KEY_ANDROID || '';
+// Firebase Cloud Functions のベースURL
+const API_BASE_URL = STRIPE_CONFIG.apiBaseUrl;
 
-// RevenueCat上のEntitlement ID（ダッシュボードで設定）
-const ENTITLEMENT_LIGHT = 'plan_light';
-const ENTITLEMENT_STANDARD = 'plan_standard';
-const ENTITLEMENT_PREMIUM = 'plan_premium';
-
-// コインパッケージのRevenueCat Product ID
-export const COIN_PRODUCT_IDS: Record<string, string> = {
-  coin_50: 'syupee_coin_50',
-  coin_100: 'syupee_coin_100',
-  coin_300: 'syupee_coin_300',
-  coin_500: 'syupee_coin_500',
-  coin_1000: 'syupee_coin_1000',
+// コインパッケージの Stripe Price ID
+export const COIN_PRICE_IDS: Record<string, string> = {
+  coin_50: 'price_1TCqQeQLTQl0iplLMyV8xhCe',
+  coin_100: 'price_1TCqJjQLTQl0iplL4CFMA4HE',
+  coin_300: 'price_1TCqROQLTQl0iplLQSqTVRct',
+  coin_500: 'price_1TCqRhQLTQl0iplLeYOnxGkx',
+  coin_1000: 'price_1TCqS6QLTQl0iplLiJuXs9Y6',
 };
 
-// サブスクリプションのRevenueCat Product ID
-export const PLAN_PRODUCT_IDS: Record<SubscriptionPlan, string> = {
-  light: 'syupee_plan_light',
-  standard: 'syupee_plan_standard',
-  premium: 'syupee_plan_premium',
+// サブスクリプションの Stripe Price ID
+export const PLAN_PRICE_IDS: Record<SubscriptionPlan, string> = {
+  free: '',
+  light: 'price_1TCqIMQLTQl0iplLj5prm8Rl',
+  standard: 'price_1TCqSnQLTQl0iplLhjqYqJJl',
+  premium: 'price_1TCqT1QLTQl0iplLROTdHl5b',
 };
 
 let isInitialized = false;
@@ -44,185 +37,209 @@ let isInitialized = false;
 // ============================
 
 /**
- * RevenueCat SDKを初期化
- * アプリ起動時に1回だけ呼ぶ
+ * Stripe SDK初期化フラグをセット
+ * 実際の初期化はApp.tsxのStripeProviderで行う
  */
 export async function initializePurchases(userId?: string): Promise<void> {
   if (isInitialized) return;
 
-  const apiKey = Platform.OS === 'ios' ? REVENUECAT_API_KEY_IOS : REVENUECAT_API_KEY_ANDROID;
+  const publishableKey = STRIPE_CONFIG.publishableKey;
 
-  if (!apiKey) {
-    console.warn('[Purchases] RevenueCat APIキーが設定されていません。決済機能は無効です。');
+  if (!publishableKey) {
+    console.warn('[Stripe] Publishable Keyが設定されていません。課金機能は無効です。');
     return;
   }
 
-  try {
-    Purchases.setLogLevel(LOG_LEVEL.DEBUG);
-
-    if (userId) {
-      await Purchases.configure({ apiKey, appUserID: userId });
-    } else {
-      await Purchases.configure({ apiKey });
-    }
-
-    isInitialized = true;
-    console.log('[Purchases] RevenueCat初期化完了');
-  } catch (error) {
-    console.error('[Purchases] 初期化エラー:', error);
-  }
+  isInitialized = true;
+  console.log('[Stripe] 初期化完了');
 }
 
 /**
- * RevenueCatが初期化済みかどうか
+ * Stripeが初期化済みかどうか
  */
 export function isPurchasesAvailable(): boolean {
   return isInitialized;
 }
 
 // ============================
-// ユーザー識別
+// Firebase認証トークン取得
+// ============================
+
+async function getAuthToken(): Promise<string | null> {
+  try {
+    const user = getCurrentFirebaseUser();
+    if (!user) return null;
+    return await user.getIdToken();
+  } catch {
+    return null;
+  }
+}
+
+// ============================
+// APIリクエスト
+// ============================
+
+async function apiRequest(endpoint: string, body: Record<string, unknown>): Promise<any> {
+  const token = await getAuthToken();
+  if (!token) {
+    throw new Error('認証されていません。ログインしてください。');
+  }
+
+  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.message || `APIエラー (${response.status})`);
+  }
+
+  return response.json();
+}
+
+// ============================
+// ユーザー管理
 // ============================
 
 /**
- * ログインユーザーをRevenueCatに紐づける
+ * ログインユーザーをStripeに紐づける（Stripe Customerの作成/取得）
  */
 export async function loginPurchaseUser(userId: string): Promise<void> {
-  if (!isInitialized) return;
+  if (!isInitialized || !isFirebaseAvailable) return;
   try {
-    await Purchases.logIn(userId);
+    await apiRequest('/stripeCreateOrGetCustomer', { userId });
+    console.log('[Stripe] ユーザー紐づけ完了');
   } catch (error) {
-    console.error('[Purchases] ユーザーログインエラー:', error);
+    console.error('[Stripe] ユーザー紐づけエラー:', error);
   }
 }
 
 /**
- * ログアウト時にRevenueCatの匿名ユーザーに戻す
+ * ログアウト時の処理
  */
 export async function logoutPurchaseUser(): Promise<void> {
-  if (!isInitialized) return;
-  try {
-    await Purchases.logOut();
-  } catch (error) {
-    console.error('[Purchases] ログアウトエラー:', error);
-  }
+  console.log('[Stripe] ログアウト処理完了');
+}
+
+// ============================
+// オファリング型定義
+// ============================
+
+export interface CoinOffering {
+  packageId: string;
+  priceId: string;
+  localizedPrice: string;
+  price: number;
+  currencyCode: string;
+}
+
+export interface PlanOffering {
+  planKey: SubscriptionPlan;
+  priceId: string;
+  localizedPrice: string;
+  price: number;
+  currencyCode: string;
 }
 
 // ============================
 // オファリング取得
 // ============================
 
-export interface CoinOffering {
-  packageId: string;
-  productId: string;
-  localizedPrice: string;
-  price: number;
-  currencyCode: string;
-  rcPackage: PurchasesPackage;
-}
-
-export interface PlanOffering {
-  planKey: SubscriptionPlan;
-  productId: string;
-  localizedPrice: string;
-  price: number;
-  currencyCode: string;
-  rcPackage: PurchasesPackage;
-}
-
 /**
- * 利用可能なオファリングを取得
+ * 利用可能な商品情報をサーバーから取得
  */
 export async function getOfferings(): Promise<{
   coinPackages: CoinOffering[];
   planPackages: PlanOffering[];
 } | null> {
-  if (!isInitialized) return null;
+  if (!isInitialized || !isFirebaseAvailable) return null;
 
   try {
-    const offerings = await Purchases.getOfferings();
+    const result = await apiRequest('/stripeGetProducts', {});
 
-    const coinPackages: CoinOffering[] = [];
-    const planPackages: PlanOffering[] = [];
+    const coinPackages: CoinOffering[] = (result.coinProducts || []).map((p: any) => ({
+      packageId: p.packageId,
+      priceId: p.priceId,
+      localizedPrice: p.localizedPrice,
+      price: p.price,
+      currencyCode: p.currencyCode || 'JPY',
+    }));
 
-    // コインオファリング（"coins" offering identifier）
-    const coinOffering = offerings.all['coins'];
-    if (coinOffering) {
-      for (const pkg of coinOffering.availablePackages) {
-        const product = pkg.product;
-        // パッケージIDからコインIDを逆引き
-        const coinId = Object.entries(COIN_PRODUCT_IDS).find(
-          ([, pid]) => pid === product.identifier
-        )?.[0];
-
-        if (coinId) {
-          coinPackages.push({
-            packageId: coinId,
-            productId: product.identifier,
-            localizedPrice: product.priceString,
-            price: product.price,
-            currencyCode: product.currencyCode,
-            rcPackage: pkg,
-          });
-        }
-      }
-    }
-
-    // サブスクリプションオファリング（"plans" offering identifier）
-    const planOffering = offerings.all['plans'];
-    if (planOffering) {
-      for (const pkg of planOffering.availablePackages) {
-        const product = pkg.product;
-        const planEntry = Object.entries(PLAN_PRODUCT_IDS).find(
-          ([, pid]) => pid === product.identifier
-        );
-
-        if (planEntry) {
-          planPackages.push({
-            planKey: planEntry[0] as SubscriptionPlan,
-            productId: product.identifier,
-            localizedPrice: product.priceString,
-            price: product.price,
-            currencyCode: product.currencyCode,
-            rcPackage: pkg,
-          });
-        }
-      }
-    }
+    const planPackages: PlanOffering[] = (result.planProducts || []).map((p: any) => ({
+      planKey: p.planKey as SubscriptionPlan,
+      priceId: p.priceId,
+      localizedPrice: p.localizedPrice,
+      price: p.price,
+      currencyCode: p.currencyCode || 'JPY',
+    }));
 
     return { coinPackages, planPackages };
   } catch (error) {
-    console.error('[Purchases] オファリング取得エラー:', error);
+    console.error('[Stripe] 商品情報取得エラー:', error);
     return null;
   }
 }
 
 // ============================
-// コイン購入（消耗品）
+// コイン購入（一回払い）
 // ============================
 
 export interface PurchaseResult {
   success: boolean;
   cancelled?: boolean;
   error?: string;
-  customerInfo?: CustomerInfo;
+  plan?: SubscriptionPlan;
 }
 
 /**
- * コインパッケージを購入
+ * コインパッケージを購入（Stripe PaymentSheet使用）
  */
 export async function purchaseCoinPackage(offering: CoinOffering): Promise<PurchaseResult> {
-  if (!isInitialized) {
-    return { success: false, error: '決済サービスが初期化されていません' };
+  if (!isInitialized || !isFirebaseAvailable) {
+    return { success: false, error: 'Payment service is not initialized' };
   }
 
   try {
-    const { customerInfo } = await Purchases.purchasePackage(offering.rcPackage);
-    return { success: true, customerInfo };
-  } catch (error: any) {
-    if (error?.code === PURCHASES_ERROR_CODE.PURCHASE_CANCELLED_ERROR) {
-      return { success: false, cancelled: true };
+    // 1. サーバーからPaymentIntentを作成
+    const { paymentIntent, ephemeralKey, customer } = await apiRequest(
+      '/stripeCreateCoinPaymentIntent',
+      {
+        priceId: offering.priceId,
+        packageId: offering.packageId,
+      }
+    );
+
+    // 2. PaymentSheetを初期化
+    const { error: initError } = await initPaymentSheet({
+      paymentIntentClientSecret: paymentIntent,
+      customerEphemeralKeySecret: ephemeralKey,
+      customerId: customer,
+      merchantDisplayName: 'Syupee',
+      style: 'automatic',
+      returnURL: 'syupee://stripe-redirect',
+    });
+
+    if (initError) {
+      return { success: false, error: initError.message };
     }
+
+    // 3. PaymentSheetを表示
+    const { error: presentError } = await presentPaymentSheet();
+
+    if (presentError) {
+      if (presentError.code === 'Canceled') {
+        return { success: false, cancelled: true };
+      }
+      return { success: false, error: presentError.message };
+    }
+
+    return { success: true };
+  } catch (error: any) {
     return { success: false, error: error.message || '購入に失敗しました' };
   }
 }
@@ -232,20 +249,54 @@ export async function purchaseCoinPackage(offering: CoinOffering): Promise<Purch
 // ============================
 
 /**
- * プランサブスクリプションを購入
+ * プランサブスクリプションを購入（Stripe PaymentSheet使用）
  */
 export async function purchasePlanSubscription(offering: PlanOffering): Promise<PurchaseResult> {
-  if (!isInitialized) {
-    return { success: false, error: '決済サービスが初期化されていません' };
+  if (!isInitialized || !isFirebaseAvailable) {
+    return { success: false, error: 'Payment service is not initialized' };
   }
 
   try {
-    const { customerInfo } = await Purchases.purchasePackage(offering.rcPackage);
-    return { success: true, customerInfo };
-  } catch (error: any) {
-    if (error?.code === PURCHASES_ERROR_CODE.PURCHASE_CANCELLED_ERROR) {
-      return { success: false, cancelled: true };
+    // 1. サーバーからSubscriptionを作成
+    const { paymentIntent, ephemeralKey, customer, activated } = await apiRequest(
+      '/stripeCreateSubscription',
+      {
+        priceId: offering.priceId,
+        planKey: offering.planKey,
+      }
+    );
+
+    // サーバー側で即時アクティブ化された場合（無料プラン等）
+    if (activated) {
+      return { success: true, plan: offering.planKey };
     }
+
+    // 2. PaymentSheetを初期化
+    const { error: initError } = await initPaymentSheet({
+      paymentIntentClientSecret: paymentIntent,
+      customerEphemeralKeySecret: ephemeralKey,
+      customerId: customer,
+      merchantDisplayName: 'Syupee',
+      style: 'automatic',
+      returnURL: 'syupee://stripe-redirect',
+    });
+
+    if (initError) {
+      return { success: false, error: initError.message };
+    }
+
+    // 3. PaymentSheetを表示
+    const { error: presentError } = await presentPaymentSheet();
+
+    if (presentError) {
+      if (presentError.code === 'Canceled') {
+        return { success: false, cancelled: true };
+      }
+      return { success: false, error: presentError.message };
+    }
+
+    return { success: true, plan: offering.planKey };
+  } catch (error: any) {
     return { success: false, error: error.message || 'プラン購入に失敗しました' };
   }
 }
@@ -258,34 +309,56 @@ export async function purchasePlanSubscription(offering: PlanOffering): Promise<
  * 現在のサブスクリプションプランを取得
  */
 export async function getCurrentPlan(): Promise<SubscriptionPlan> {
-  if (!isInitialized) return 'light';
+  if (!isInitialized || !isFirebaseAvailable) return 'free';
 
   try {
-    const customerInfo = await Purchases.getCustomerInfo();
-    const entitlements = customerInfo.entitlements.active;
-
-    if (entitlements[ENTITLEMENT_PREMIUM]?.isActive) return 'premium';
-    if (entitlements[ENTITLEMENT_STANDARD]?.isActive) return 'standard';
-    if (entitlements[ENTITLEMENT_LIGHT]?.isActive) return 'light';
-
-    return 'light';
+    const result = await apiRequest('/stripeGetCurrentPlan', {});
+    return (result.plan as SubscriptionPlan) || 'free';
   } catch (error) {
-    console.error('[Purchases] プラン確認エラー:', error);
-    return 'light';
+    console.error('[Stripe] プラン確認エラー:', error);
+    return 'free';
   }
 }
 
 /**
- * CustomerInfoからプランを判定
+ * PurchaseResultからプランを取得
  */
-export function getPlanFromCustomerInfo(customerInfo: CustomerInfo): SubscriptionPlan {
-  const entitlements = customerInfo.entitlements.active;
+export function getPlanFromPurchaseResult(result: PurchaseResult): SubscriptionPlan {
+  return result.plan || 'free';
+}
 
-  if (entitlements[ENTITLEMENT_PREMIUM]?.isActive) return 'premium';
-  if (entitlements[ENTITLEMENT_STANDARD]?.isActive) return 'standard';
-  if (entitlements[ENTITLEMENT_LIGHT]?.isActive) return 'light';
+// ============================
+// サブスクリプション管理
+// ============================
 
-  return 'light';
+/**
+ * サブスクリプションをキャンセル
+ */
+export async function cancelSubscription(): Promise<boolean> {
+  if (!isInitialized || !isFirebaseAvailable) return false;
+
+  try {
+    await apiRequest('/stripeCancelSubscription', {});
+    return true;
+  } catch (error) {
+    console.error('[Stripe] サブスクキャンセルエラー:', error);
+    return false;
+  }
+}
+
+/**
+ * Stripe Customer PortalのURLを取得
+ */
+export async function getCustomerPortalUrl(): Promise<string | null> {
+  if (!isInitialized || !isFirebaseAvailable) return null;
+
+  try {
+    const result = await apiRequest('/stripeCreatePortalSession', {});
+    return result.url || null;
+  } catch (error) {
+    console.error('[Stripe] ポータルURL取得エラー:', error);
+    return null;
+  }
 }
 
 // ============================
@@ -293,22 +366,21 @@ export function getPlanFromCustomerInfo(customerInfo: CustomerInfo): Subscriptio
 // ============================
 
 /**
- * 購入を復元する（機種変更時など）
+ * 購入を復元する（サーバー側でサブスク状態を確認）
  */
 export async function restorePurchases(): Promise<{
   plan: SubscriptionPlan;
-  customerInfo: CustomerInfo | null;
 }> {
-  if (!isInitialized) {
-    return { plan: 'light', customerInfo: null };
+  if (!isInitialized || !isFirebaseAvailable) {
+    return { plan: 'free' };
   }
 
   try {
-    const customerInfo = await Purchases.restorePurchases();
-    const plan = getPlanFromCustomerInfo(customerInfo);
-    return { plan, customerInfo };
+    const result = await apiRequest('/stripeRestorePurchases', {});
+    const plan = (result.plan as SubscriptionPlan) || 'free';
+    return { plan };
   } catch (error) {
-    console.error('[Purchases] 復元エラー:', error);
-    return { plan: 'light', customerInfo: null };
+    console.error('[Stripe] 復元エラー:', error);
+    return { plan: 'free' };
   }
 }

@@ -22,6 +22,9 @@ import BudgetSettingScreen from '../screens/BudgetSettingScreen';
 import CoinShopScreen from '../screens/CoinShopScreen';
 import QuotaPurchaseScreen from '../screens/QuotaPurchaseScreen';
 import RankDetailScreen from '../screens/RankDetailScreen';
+import TermsScreen from '../screens/TermsScreen';
+import PrivacyScreen from '../screens/PrivacyScreen';
+import CouponScreen from '../screens/CouponScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<RootTabParamList>();
@@ -183,7 +186,9 @@ export default function AppNavigator() {
             <Stack.Screen
               name="EditExpense"
               component={EditExpenseScreen}
-              options={{ title: '支出編集' }}
+              options={({ route }: any) => ({
+                title: route.params?.expenseId ? '支出編集' : '支出を追加',
+              })}
             />
             <Stack.Screen
               name="PlanSelect"
@@ -212,6 +217,21 @@ export default function AppNavigator() {
               options={{ title: 'ランク' }}
             />
             */}
+            <Stack.Screen
+              name="Terms"
+              component={TermsScreen}
+              options={{ title: '利用規約' }}
+            />
+            <Stack.Screen
+              name="Privacy"
+              component={PrivacyScreen}
+              options={{ title: 'プライバシーポリシー' }}
+            />
+            <Stack.Screen
+              name="CouponRedeem"
+              component={CouponScreen}
+              options={{ title: 'クーポン' }}
+            />
           </>
         )}
       </Stack.Navigator>

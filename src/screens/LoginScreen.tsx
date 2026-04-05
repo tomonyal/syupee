@@ -5,6 +5,7 @@ import {
   StyleSheet,
   Image,
   StatusBar,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -20,6 +21,7 @@ export default function LoginScreen() {
     try {
       await signIn();
     } catch (error: any) {
+      Alert.alert('サインインエラー', error.message || String(error));
       console.error('Sign in error:', error);
     }
   };

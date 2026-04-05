@@ -1,0 +1,26 @@
+{
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "functions": {
+    "predeploy": [
+      "npm --prefix \"$RESOURCE_DIR\" run build"
+    ],
+    "source": "functions"
+  },
+  "hosting": {
+    "public": "public",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      { "source": "/stripe/createOrGetCustomer", "function": "stripeCreateOrGetCustomer" },
+      { "source": "/stripe/getProducts", "function": "stripeGetProducts" },
+      { "source": "/stripe/createCoinPaymentIntent", "function": "stripeCreateCoinPaymentIntent" },
+      { "source": "/stripe/createSubscription", "function": "stripeCreateSubscription" },
+      { "source": "/stripe/getCurrentPlan", "function": "stripeGetCurrentPlan" },
+      { "source": "/stripe/restorePurchases", "function": "stripeRestorePurchases" },
+      { "source": "/stripe/cancelSubscription", "function": "stripeCancelSubscription" },
+      { "source": "/stripe/createPortalSession", "function": "stripeCreatePortalSession" },
+      { "source": "/stripe/webhook", "function": "stripeWebhook" }
+    ]
+  }
+}

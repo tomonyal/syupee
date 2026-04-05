@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { StripeProvider } from '@stripe/stripe-react-native';
 import { AppNavigator } from './src/navigation';
 import { initFirebase, onAuthChange, refreshUser } from './src/services/firebase';
 import { initializePurchases, loginPurchaseUser } from './src/services/purchases';
+import { STRIPE_CONFIG } from './src/services/config';
 import { getDatabase } from './src/database';
 import { useAuthStore } from './src/store';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
@@ -27,17 +29,22 @@ export default function App() {
 
       // 認証状態の監視
       const unsubscribe = onAuthChange(async (firebaseUser) => {
-        if (firebaseUser) {
-          const user = await refreshUser(firebaseUser.uid);
-          setUser(user);
+        try {
+          if (firebaseUser) {
+            const user = await refreshUser(firebaseUser.uid);
+            setUser(user);
 
-          // RevenueCat初期化（ユーザーが認証済みの場合）
-          await initializePurchases(firebaseUser.uid);
-          await loginPurchaseUser(firebaseUser.uid);
-        } else {
-          setUser(null);
+            // Stripe初期化（ユーザーが認証済みの場合）
+            await initializePurchases(firebaseUser.uid);
+            await loginPurchaseUser(firebaseUser.uid);
+          } else {
+            setUser(null);
+          }
+        } catch (e) {
+          console.warn('[App] onAuthChange callback error:', e);
+        } finally {
+          setIsInitializing(false);
         }
-        setIsInitializing(false);
       });
 
       return () => unsubscribe();
@@ -57,8 +64,14 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <StatusBar style="light" />
-      <AppNavigator />
+      <StripeProvider
+        publishableKey={STRIPE_CONFIG.publishableKey}
+        merchantIdentifier={STRIPE_CONFIG.merchantIdentifier}
+        urlScheme="syupee"
+      >
+        <StatusBar style="light" />
+        <AppNavigator />
+      </StripeProvider>
     </SafeAreaProvider>
   );
 }
