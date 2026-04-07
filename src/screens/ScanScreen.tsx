@@ -48,9 +48,10 @@ export default function ScanScreen() {
     }, [])
   );
 
-  // 使用上限チェック（ローカルDB）
+  // 使用上限チェック（プラン枠＋追加購入枠）
   const planInfo = user ? PLAN_MAP[user.plan] : null;
-  const isOverLimit = planInfo ? ocrUsedThisMonth >= planInfo.ocrLimit : false;
+  const planLimitReached = planInfo ? ocrUsedThisMonth >= planInfo.ocrLimit : false;
+  const isOverLimit = planLimitReached && ocrQuotaBalance <= 0;
 
   // コインチェック＆消費してから読み込み
   const processWithCoinCheck = async () => {
@@ -178,14 +179,20 @@ export default function ScanScreen() {
     );
   }
 
-  // 上限超え
+  // 上限超え（枠もコインもない場合のみ表示）
   if (isOverLimit) {
     return (
       <View style={[styles.screen, styles.center]}>
         <Ionicons name="alert-circle-outline" size={64} color={COLORS.warning} />
         <Text style={styles.permissionText}>
-          今月のOCR利用回数が上限に達しました
+          今月のOCR利用回数が上限に達しました{'\n'}
+          コインまたは追加枠を購入すると利用できます
         </Text>
+        <Button
+          title="追加枠・コインを購入"
+          onPress={() => navigation.navigate('QuotaPurchase')}
+          style={{ marginBottom: 12 }}
+        />
         <Button
           title="プランをアップグレード"
           onPress={() => navigation.navigate('PlanSelect')}
