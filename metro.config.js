@@ -3,6 +3,10 @@ const path = require('path');
 
 const config = getDefaultConfig(__dirname);
 
+// functions/ ディレクトリをMetroのウォッチ対象から除外
+// （Cloud Functionsの package.json が誤って解決されるのを防ぐ）
+config.resolver.blockList = [/functions\/.*/];
+
 // Firebase JS SDK モジュール解決の問題を修正:
 // firebase/app は ESM (import) で @firebase/app を読み、
 // @firebase/auth/dist/rn は CJS (require) で @firebase/app を読むため、

@@ -19,8 +19,7 @@ import { COLORS, SPACING, FONT_SIZE, BORDER_RADIUS, CATEGORY_MAP, COIN_PER_SCAN,
 import { PLAN_MAP } from '../constants';
 import { getDailyAdvice } from '../services/openai';
 import { getSeasonDisplayName } from '../utils';
-import { requestInitialCoins } from '../services/firebase';
-import * as Application from 'expo-application';
+
 
 const screenWidth = Dimensions.get('window').width;
 
@@ -42,7 +41,7 @@ export default function HomeScreen() {
   const [refreshing, setRefreshing] = React.useState(false);
   const [dailyAdvice, setDailyAdvice] = useState<string | null>(null);
   const [adviceLoading, setAdviceLoading] = useState(false);
-  const [requestingCoins, setRequestingCoins] = useState(false);
+
 
   const loadAdvice = useCallback(async () => {
     setAdviceLoading(true);
@@ -56,20 +55,7 @@ export default function HomeScreen() {
     }
   }, []);
 
-  const handleRequestInitialCoins = useCallback(async () => {
-    if (!user) return;
-    setRequestingCoins(true);
-    try {
-      const deviceId = await Application.getIosIdForVendorAsync() || 'unknown';
-      await requestInitialCoins(user.uid, deviceId);
-      await refresh();
-      Alert.alert('申請完了', '初回コインの申請を受け付けました。\nクーポンコードの発行をお待ちください。');
-    } catch (e: any) {
-      Alert.alert('エラー', e.message || '申請に失敗しました');
-    } finally {
-      setRequestingCoins(false);
-    }
-  }, [user]);
+
 
   useFocusEffect(
     useCallback(() => {
@@ -115,51 +101,6 @@ export default function HomeScreen() {
     >
       {/* 月選択 */}
       <MonthSelector currentMonth={selectedMonth} onMonthChange={setSelectedMonth} />
-
-      {/* 初回コインバナー */}
-      {user && (!user.initialCoinStatus || user.initialCoinStatus === 'none') && (
-        <TouchableOpacity
-          style={styles.initialCoinBanner}
-          activeOpacity={0.8}
-          onPress={handleRequestInitialCoins}
-          disabled={requestingCoins}
-        >
-          <Text style={styles.initialCoinIcon}>🎁</Text>
-          <View style={styles.initialCoinTextWrap}>
-            <Text style={styles.initialCoinTitle}>初回無料 310コイン</Text>
-            <Text style={styles.initialCoinSub}>タップして申請しよう！</Text>
-          </View>
-          {requestingCoins ? (
-            <ActivityIndicator size="small" color={COLORS.textOnPrimary} />
-          ) : (
-            <Ionicons name="chevron-forward" size={20} color={COLORS.textOnPrimary} />
-          )}
-        </TouchableOpacity>
-      )}
-      {user?.initialCoinStatus === 'requested' && (
-        <View style={[styles.initialCoinBanner, styles.initialCoinBannerPending]}>
-          <Text style={styles.initialCoinIcon}>⏳</Text>
-          <View style={styles.initialCoinTextWrap}>
-            <Text style={styles.initialCoinTitle}>クーポンコード要求中</Text>
-            <Text style={styles.initialCoinSub}>発行までしばらくお待ちください</Text>
-          </View>
-        </View>
-      )}
-      {user?.initialCoinStatus === 'issued' && user.initialCoinCouponCode && (
-        <TouchableOpacity
-          style={[styles.initialCoinBanner, styles.initialCoinBannerIssued]}
-          activeOpacity={0.8}
-          onPress={() => navigation.navigate('CouponRedeem')}
-        >
-          <Text style={styles.initialCoinIcon}>🎉</Text>
-          <View style={styles.initialCoinTextWrap}>
-            <Text style={styles.initialCoinTitle}>クーポンコード発行済み！</Text>
-            <Text style={styles.initialCoinCode}>{user.initialCoinCouponCode}</Text>
-            <Text style={styles.initialCoinSub}>タップして使う</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={20} color="#fff" />
-        </TouchableOpacity>
-      )}
 
       {/* 月間サマリーカード（一番上） */}
       <TouchableOpacity
@@ -213,7 +154,7 @@ export default function HomeScreen() {
           </View>
           <Text style={styles.advicePromo}>ライトプラン以上でAIがアドバイスしてくれます。</Text>
         </Card>
-      ) : (adviceLoading || dailyAdvice) && (
+      ) : (
         <Card style={styles.adviceCard}>
           <View style={styles.adviceHeader}>
             <Text style={styles.adviceAvatar}>🐣</Text>
@@ -224,8 +165,10 @@ export default function HomeScreen() {
               <ActivityIndicator size="small" color={COLORS.secondary} />
               <Text style={styles.adviceLoadingText}>シュッピーが考え中...</Text>
             </View>
-          ) : (
+          ) : dailyAdvice ? (
             <Text style={styles.adviceText}>{dailyAdvice}</Text>
+          ) : (
+            <Text style={styles.adviceLoadingText}>現在アドバイスを取得できません。しばらくしてからホーム画面を再読み込みしてください。</Text>
           )}
         </Card>
       )}
@@ -666,44 +609,5 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZE.sm,
     color: COLORS.primary,
     fontWeight: '600',
-  },
-  initialCoinBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: COLORS.primary,
-    borderRadius: BORDER_RADIUS.md,
-    padding: SPACING.md,
-    marginBottom: SPACING.md,
-  },
-  initialCoinBannerPending: {
-    backgroundColor: '#FF9800',
-  },
-  initialCoinBannerIssued: {
-    backgroundColor: '#4CAF50',
-  },
-  initialCoinIcon: {
-    fontSize: 28,
-    marginRight: SPACING.sm,
-  },
-  initialCoinTextWrap: {
-    flex: 1,
-  },
-  initialCoinTitle: {
-    fontSize: FONT_SIZE.md,
-    fontWeight: 'bold',
-    color: COLORS.textOnPrimary,
-  },
-  initialCoinSub: {
-    fontSize: FONT_SIZE.xs,
-    color: COLORS.textOnPrimary,
-    opacity: 0.85,
-    marginTop: 2,
-  },
-  initialCoinCode: {
-    fontSize: FONT_SIZE.lg,
-    fontWeight: 'bold',
-    color: '#fff',
-    letterSpacing: 2,
-    marginTop: 2,
   },
 });

@@ -2,7 +2,7 @@
   "expo": {
     "name": "シュッピー",
     "slug": "syupee",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -17,7 +17,8 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.syupee.app",
-      "buildNumber": "26",
+      "buildNumber": "48",
+      "usesAppleSignIn": true,
       "googleServicesFile": "./GoogleService-Info.plist",
       "infoPlist": {
         "NSCameraUsageDescription": "レシートを撮影するためにカメラを使用します",
@@ -47,20 +48,14 @@
       ]
     },
     "plugins": [
+      "expo-apple-authentication",
       "expo-camera",
       "expo-image-picker",
       "expo-document-picker",
       "expo-sqlite",
       "expo-asset",
       "expo-font",
-      "@react-native-google-signin/google-signin",
-      [
-        "@stripe/stripe-react-native",
-        {
-          "merchantIdentifier": "merchant.com.syupee",
-          "enableGooglePay": false
-        }
-      ]
+      "@react-native-google-signin/google-signin"
     ],
     "extra": {
       "eas": {

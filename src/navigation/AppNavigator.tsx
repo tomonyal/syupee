@@ -24,7 +24,7 @@ import QuotaPurchaseScreen from '../screens/QuotaPurchaseScreen';
 import RankDetailScreen from '../screens/RankDetailScreen';
 import TermsScreen from '../screens/TermsScreen';
 import PrivacyScreen from '../screens/PrivacyScreen';
-import CouponScreen from '../screens/CouponScreen';
+
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<RootTabParamList>();
@@ -227,11 +227,7 @@ export default function AppNavigator() {
               component={PrivacyScreen}
               options={{ title: 'プライバシーポリシー' }}
             />
-            <Stack.Screen
-              name="CouponRedeem"
-              component={CouponScreen}
-              options={{ title: 'クーポン' }}
-            />
+
           </>
         )}
       </Stack.Navigator>

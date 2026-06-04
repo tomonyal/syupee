@@ -72,22 +72,16 @@ export default function SettingsScreen() {
     }
     Alert.alert(
       'プランを解約',
-      `${planInfo?.label || ''}プランを解約し、フリープラン（無料）に戻りますか？\n\n現在の請求期間の終了後にダウングレードされます。`,
+      `Appleのサブスクリプション管理画面を開きます。そちらから解約手続きを行ってください。\n\n解約後、現在の請求期間が終了するとフリープランに自動的に切り替わります。`,
       [
         { text: 'キャンセル' },
         {
-          text: '解約する',
-          style: 'destructive',
+          text: '管理画面を開く',
           onPress: async () => {
             try {
-              const success = await cancelSubscription();
-              if (success) {
-                Alert.alert('完了', 'プランの解約手続きが完了しました。');
-              } else {
-                Alert.alert('エラー', '解約処理に失敗しました。');
-              }
+              await cancelSubscription();
             } catch (error) {
-              Alert.alert('エラー', '解約処理に失敗しました。');
+              Alert.alert('エラー', 'サブスクリプション管理画面を開けませんでした。\n設定アプリ → Apple ID → サブスクリプションから解約できます。');
             }
           },
         },
@@ -212,13 +206,7 @@ export default function SettingsScreen() {
           onPress={() => navigation.navigate('CoinShop')}
           showArrow
         />
-        <SettingsRow
-          icon="ticket-outline"
-          label="クーポンコード"
-          subtitle="クーポンコードを入力してコインを受け取る"
-          onPress={() => navigation.navigate('CouponRedeem')}
-          showArrow
-        />
+
         <SettingsRow
           icon="add-circle-outline"
           label="枠を追加購入"
@@ -274,7 +262,10 @@ export default function SettingsScreen() {
                 { text: 'キャンセル' },
                 { text: 'プラン変更', onPress: () => navigation.navigate('PlanSelect') },
               ])
-            : () => Linking.openURL('mailto:tomonyal1224@gmail.com?subject=シュッピーへのご要望・お問い合わせ')
+            : () => {
+                const body = `\n\n---\nユーザーID: ${user?.uid || '不明'}\nデバイスID: ${user?.deviceId || '不明'}`;
+                Linking.openURL(`mailto:tomonyal1224@gmail.com?subject=シュッピーへのご要望・お問い合わせ&body=${encodeURIComponent(body)}`);
+              }
           }
           showArrow
         />

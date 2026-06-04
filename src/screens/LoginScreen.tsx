@@ -6,6 +6,7 @@ import {
   Image,
   StatusBar,
   Alert,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -15,7 +16,7 @@ import { useAuthStore } from '../store';
 import { COLORS, SPACING, FONT_SIZE, BORDER_RADIUS } from '../constants';
 
 export default function LoginScreen() {
-  const { signIn, isLoading } = useAuthStore();
+  const { signIn, signInApple, isLoading } = useAuthStore();
 
   const handleSignIn = async () => {
     try {
@@ -23,6 +24,17 @@ export default function LoginScreen() {
     } catch (error: any) {
       Alert.alert('サインインエラー', error.message || String(error));
       console.error('Sign in error:', error);
+    }
+  };
+
+  const handleAppleSignIn = async () => {
+    try {
+      await signInApple();
+    } catch (error: any) {
+      // ユーザーキャンセルは無視
+      if (error?.code === 'ERR_REQUEST_CANCELED') return;
+      Alert.alert('サインインエラー', error.message || String(error));
+      console.error('Apple Sign in error:', error);
     }
   };
 
@@ -61,6 +73,17 @@ export default function LoginScreen() {
         {/* ログインボタン */}
         <View style={styles.loginArea}>
           <Button
+            title="Appleでサインイン"
+            onPress={handleAppleSignIn}
+            loading={isLoading}
+            variant="outline"
+            size="large"
+            fullWidth
+            icon={<Ionicons name="logo-apple" size={20} color="#FFFFFF" />}
+            style={styles.appleButton}
+            textStyle={styles.appleButtonText}
+          />
+          <Button
             title="Googleアカウントで始める"
             onPress={handleSignIn}
             loading={isLoading}
@@ -71,7 +94,6 @@ export default function LoginScreen() {
             style={styles.googleButton}
             textStyle={styles.googleButtonText}
           />
-          <Text style={styles.trialText}>🎁 初月無料でお試し！</Text>
         </View>
       </SafeAreaView>
     </LinearGradient>
@@ -154,16 +176,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: SPACING.md,
   },
+  appleButton: {
+    backgroundColor: '#000000',
+    borderColor: '#000000',
+  },
+  appleButtonText: {
+    color: '#FFFFFF',
+  },
   googleButton: {
     backgroundColor: 'rgba(255,255,255,0.2)',
     borderColor: 'rgba(255,255,255,0.8)',
   },
   googleButtonText: {
     color: COLORS.textOnPrimary,
-  },
-  trialText: {
-    fontSize: FONT_SIZE.md,
-    color: 'rgba(255,255,255,0.8)',
-    fontWeight: '500',
   },
 });

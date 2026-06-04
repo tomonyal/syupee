@@ -23,8 +23,4 @@ export const GOOGLE_CONFIG = {
   webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '',
 };
 
-export const STRIPE_CONFIG = {
-  publishableKey: process.env.EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY || '',
-  merchantIdentifier: process.env.EXPO_PUBLIC_STRIPE_MERCHANT_IDENTIFIER || 'merchant.com.syupee',
-  apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL || '',
-};
+export const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || '';

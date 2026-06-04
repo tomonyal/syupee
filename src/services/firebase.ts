@@ -8,6 +8,7 @@ import {
   signInWithCredential,
   reauthenticateWithCredential,
   GoogleAuthProvider,
+  OAuthProvider,
   signOut as firebaseSignOut,
   deleteUser as firebaseDeleteUser,
   onAuthStateChanged,
@@ -36,7 +37,7 @@ import {
   Firestore,
 } from 'firebase/firestore';
 import { FIREBASE_CONFIG, GOOGLE_CONFIG } from './config';
-import { User, SubscriptionPlan, SeasonScanStats, CoinTransaction, InitialCoinStatus } from '../types';
+import { User, SubscriptionPlan, SeasonScanStats, CoinTransaction } from '../types';
 
 // Google Sign-In を動的に読み込み（Expo Go では利用不可）
 let GoogleSignin: any = null;
@@ -52,11 +53,40 @@ try {
   console.warn('[Auth] Google Sign-In is not available:', e);
 }
 
+// Apple Authentication を動的に読み込み
+let AppleAuthentication: any = null;
+let isAppleSignInAvailable = false;
+try {
+  AppleAuthentication = require('expo-apple-authentication');
+  isAppleSignInAvailable = true;
+  console.log('[Auth] Apple Authentication module loaded successfully');
+} catch (e) {
+  console.warn('[Auth] Apple Authentication is not available:', e);
+}
+
+let Crypto: any = null;
+try {
+  Crypto = require('expo-crypto');
+} catch (e) {
+  console.warn('[Auth] expo-crypto is not available:', e);
+}
+
 let app: FirebaseApp | null = null;
 let auth: any = null;
 let firestore: Firestore | null = null;
 export let isFirebaseAvailable = false;
 let initError: string = '';
+
+// Firebase初期化状態を取得（デバッグ用）
+export function getFirebaseStatus() {
+  return {
+    isAvailable: isFirebaseAvailable,
+    hasApp: !!app,
+    hasAuth: !!auth,
+    hasFirestore: !!firestore,
+    initError,
+  };
+}
 
 // タイムアウト付きPromise
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
@@ -108,11 +138,12 @@ export function initFirebase(): void {
     }
 
     if (auth) {
-      // React Native では WebSocket トランスポートが動作しないため
-      // Long Polling を強制使用する（autoDetect では検出が失敗する）
+      // React Native (Hermes) では experimentalForceLongPolling が
+      // XMLHttpRequest HostObject の timeoutId アクセスでクラッシュするため、
+      // autoDetect に切り替えて fetch ベースのトランスポートを優先する
       try {
         firestore = initializeFirestore(app, {
-          experimentalForceLongPolling: true,
+          experimentalAutoDetectLongPolling: true,
         });
       } catch (e) {
         // 既に初期化済みの場合は getFirestore にフォールバック
@@ -227,6 +258,80 @@ export async function signInWithGoogle(): Promise<User> {
   }
 }
 
+// Apple Sign-In
+export async function signInWithApple(): Promise<User> {
+  console.log('[Auth] signInWithApple called. isFirebaseAvailable:', isFirebaseAvailable, 'isAppleSignInAvailable:', isAppleSignInAvailable);
+
+  if (!isFirebaseAvailable) {
+    console.warn('[Auth] Firebase not available, using mock user');
+    return createMockUser();
+  }
+
+  if (!isAppleSignInAvailable || !AppleAuthentication) {
+    throw new Error('Apple Sign-Inはこのデバイスでは利用できません');
+  }
+
+  // nonce を生成してセキュリティを強化
+  const rawNonce = Crypto
+    ? Crypto.randomUUID()
+    : Math.random().toString(36).substring(2);
+  const hashedNonce = Crypto
+    ? await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, rawNonce)
+    : rawNonce;
+
+  const appleCredential = await AppleAuthentication.signInAsync({
+    requestedScopes: [
+      AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+      AppleAuthentication.AppleAuthenticationScope.EMAIL,
+    ],
+    nonce: hashedNonce,
+  });
+
+  const { identityToken } = appleCredential;
+  if (!identityToken) {
+    throw new Error('Apple Sign-Inに失敗しました（identityTokenが取得できません）');
+  }
+
+  const provider = new OAuthProvider('apple.com');
+  const oauthCredential = provider.credential({
+    idToken: identityToken,
+    rawNonce: rawNonce,
+  });
+
+  const userCredential = await signInWithCredential(auth, oauthCredential);
+  const firebaseUser = userCredential.user;
+
+  // Apple は初回のみ名前を返すので、displayName を設定
+  if (appleCredential.fullName) {
+    const givenName = appleCredential.fullName.givenName || '';
+    const familyName = appleCredential.fullName.familyName || '';
+    const name = `${familyName} ${givenName}`.trim();
+    if (name && !firebaseUser.displayName) {
+      // displayName が Firebase Auth に未設定の場合、Firestore に名前を保存
+      console.log('[Auth] Setting Apple user display name:', name);
+    }
+  }
+
+  try {
+    const user = await withTimeout(getOrCreateUser(firebaseUser), 15000, 'Firestore user creation timed out');
+    return user;
+  } catch (e) {
+    console.warn('[Auth] Firestore access failed, using auth-only user:', e);
+    return {
+      uid: firebaseUser.uid,
+      email: firebaseUser.email || '',
+      displayName: firebaseUser.displayName || '',
+      photoURL: firebaseUser.photoURL || undefined,
+      plan: 'free',
+      ocrUsedThisMonth: 0,
+      chatUsedThisMonth: 0,
+      ocrQuotaBalance: 0,
+      chatQuotaBalance: 0,
+      planResetDate: new Date().toISOString(),
+    };
+  }
+}
+
 // サインアウト
 export async function signOut(): Promise<void> {
   if (isGoogleSignInAvailable && GoogleSignin) {
@@ -243,7 +348,60 @@ export async function signOut(): Promise<void> {
 
 // アカウント削除
 export async function deleteAccount(uid: string): Promise<void> {
-  // 1. Firestoreのサブコレクション（coinTransactions）を削除
+  // 1. Firebase Authユーザー削除（再認証後）— 先に実行して失敗時にデータが残るようにする
+  if (isFirebaseAvailable && auth?.currentUser && auth.currentUser.uid === uid) {
+    try {
+      await firebaseDeleteUser(auth.currentUser);
+    } catch (e: any) {
+      if (e?.code === 'auth/requires-recent-login') {
+        // 再認証が必要 → ログイン方法に応じて再認証
+        const providerIds = auth.currentUser.providerData.map((p: any) => p.providerId);
+
+        if (providerIds.includes('apple.com') && isAppleSignInAvailable && AppleAuthentication) {
+          // Apple再認証
+          const rawNonce = Crypto
+            ? Crypto.randomUUID()
+            : Math.random().toString(36).substring(2);
+          const hashedNonce = Crypto
+            ? await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, rawNonce)
+            : rawNonce;
+
+          const appleCredential = await AppleAuthentication.signInAsync({
+            requestedScopes: [
+              AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+              AppleAuthentication.AppleAuthenticationScope.EMAIL,
+            ],
+            nonce: hashedNonce,
+          });
+
+          if (!appleCredential.identityToken) {
+            throw new Error('Apple再認証に失敗しました');
+          }
+
+          const provider = new OAuthProvider('apple.com');
+          const credential = provider.credential({
+            idToken: appleCredential.identityToken,
+            rawNonce: rawNonce,
+          });
+          await reauthenticateWithCredential(auth.currentUser, credential);
+          await firebaseDeleteUser(auth.currentUser);
+        } else if (isGoogleSignInAvailable && GoogleSignin) {
+          // Google再認証
+          await GoogleSignin.signIn();
+          const tokens = await GoogleSignin.getTokens();
+          const credential = GoogleAuthProvider.credential(tokens.idToken);
+          await reauthenticateWithCredential(auth.currentUser, credential);
+          await firebaseDeleteUser(auth.currentUser);
+        } else {
+          throw e;
+        }
+      } else {
+        throw e;
+      }
+    }
+  }
+
+  // 2. Firestoreのサブコレクション（coinTransactions）を削除
   if (isFirebaseAvailable && firestore) {
     const fs = firestore;
     try {
@@ -258,34 +416,12 @@ export async function deleteAccount(uid: string): Promise<void> {
       console.warn('[Account] Failed to delete subcollections:', e);
     }
 
-    // 2. Firestoreのユーザードキュメント削除
+    // 3. Firestoreのユーザードキュメント削除
     try {
       const userRef = doc(fs, 'users', uid);
       await deleteDoc(userRef);
     } catch (e) {
       console.warn('[Account] Failed to delete user doc:', e);
-    }
-  }
-
-  // 3. Firebase Authユーザー削除（再認証後）
-  if (isFirebaseAvailable && auth?.currentUser && auth.currentUser.uid === uid) {
-    try {
-      await firebaseDeleteUser(auth.currentUser);
-    } catch (e: any) {
-      if (e?.code === 'auth/requires-recent-login') {
-        // 再認証が必要 → Googleで再ログインしてから削除
-        if (isGoogleSignInAvailable && GoogleSignin) {
-          await GoogleSignin.signIn();
-          const tokens = await GoogleSignin.getTokens();
-          const credential = GoogleAuthProvider.credential(tokens.idToken);
-          await reauthenticateWithCredential(auth.currentUser, credential);
-          await firebaseDeleteUser(auth.currentUser);
-        } else {
-          throw e;
-        }
-      } else {
-        throw e;
-      }
     }
   }
 
@@ -306,6 +442,17 @@ async function getOrCreateUser(firebaseUser: any): Promise<User> {
 
   if (userSnap.exists()) {
     const data = userSnap.data();
+    
+    // 既存ユーザーで不足フィールドがある場合は初期化（マイグレーション対応）
+    const needsUpdate = !('ocrUsedThisMonth' in data) || !('chatUsedThisMonth' in data);
+    if (needsUpdate) {
+      console.log('[Firebase] Initializing missing usage fields for user:', firebaseUser.uid);
+      await setDoc(userRef, {
+        ocrUsedThisMonth: data.ocrUsedThisMonth || 0,
+        chatUsedThisMonth: data.chatUsedThisMonth || 0,
+      }, { merge: true });
+    }
+    
     return {
       uid: firebaseUser.uid,
       email: firebaseUser.email || '',
@@ -317,9 +464,6 @@ async function getOrCreateUser(firebaseUser: any): Promise<User> {
       ocrQuotaBalance: data.ocrQuotaBalance || 0,
       chatQuotaBalance: data.chatQuotaBalance || 0,
       planResetDate: data.planResetDate || new Date().toISOString(),
-      initialCoinStatus: (data.initialCoinStatus as InitialCoinStatus) || 'none',
-      initialCoinCouponCode: data.initialCoinCouponCode || undefined,
-      deviceId: data.deviceId || undefined,
     };
   }
 
@@ -335,7 +479,6 @@ async function getOrCreateUser(firebaseUser: any): Promise<User> {
     ocrQuotaBalance: 0,
     chatQuotaBalance: 0,
     planResetDate: new Date().toISOString(),
-    initialCoinStatus: 'none',
   };
 
   await setDoc(userRef, {
@@ -345,7 +488,6 @@ async function getOrCreateUser(firebaseUser: any): Promise<User> {
     ocrQuotaBalance: 0,
     chatQuotaBalance: 0,
     planResetDate: newUser.planResetDate,
-    initialCoinStatus: 'none',
     createdAt: new Date().toISOString(),
   });
 
@@ -354,67 +496,76 @@ async function getOrCreateUser(firebaseUser: any): Promise<User> {
 
 // 使用回数の更新（アトミックインクリメント）
 export async function incrementOCRUsage(uid: string): Promise<void> {
-  if (!isFirebaseAvailable || !firestore) return;
-  const userRef = doc(firestore, 'users', uid);
-  await updateDoc(userRef, { ocrUsedThisMonth: increment(1) });
+  if (!isFirebaseAvailable || !firestore) {
+    throw new Error('Firebase is not available');
+  }
+  try {
+    const userRef = doc(firestore, 'users', uid);
+    await setDoc(userRef, { ocrUsedThisMonth: increment(1) }, { merge: true });
+    console.log('[Firebase] OCR usage incremented for user:', uid);
+  } catch (error) {
+    console.error('[Firebase] Failed to increment OCR usage:', error);
+    throw error;
+  }
 }
 
 export async function incrementChatUsage(uid: string): Promise<void> {
-  if (!isFirebaseAvailable || !firestore) return;
-  const userRef = doc(firestore, 'users', uid);
-  await updateDoc(userRef, { chatUsedThisMonth: increment(1) });
+  if (!isFirebaseAvailable || !firestore) {
+    throw new Error('Firebase is not available');
+  }
+  try {
+    const userRef = doc(firestore, 'users', uid);
+    await setDoc(userRef, { chatUsedThisMonth: increment(1) }, { merge: true });
+    console.log('[Firebase] Chat usage incremented for user:', uid);
+  } catch (error) {
+    console.error('[Firebase] Failed to increment Chat usage:', error);
+    throw error;
+  }
 }
 
 // 追加購入枠の更新（アトミックインクリメント）
 export async function incrementOCRQuotaFirestore(uid: string, amount: number): Promise<void> {
   if (!isFirebaseAvailable || !firestore) return;
   const userRef = doc(firestore, 'users', uid);
-  await updateDoc(userRef, { ocrQuotaBalance: increment(amount) });
+  await setDoc(userRef, { ocrQuotaBalance: increment(amount) }, { merge: true });
 }
 
 export async function incrementChatQuotaFirestore(uid: string, amount: number): Promise<void> {
   if (!isFirebaseAvailable || !firestore) return;
   const userRef = doc(firestore, 'users', uid);
-  await updateDoc(userRef, { chatQuotaBalance: increment(amount) });
+  await setDoc(userRef, { chatQuotaBalance: increment(amount) }, { merge: true });
 }
 
 // 追加購入枠の消費（-1）
 export async function decrementOCRQuotaFirestore(uid: string): Promise<void> {
   if (!isFirebaseAvailable || !firestore) return;
   const userRef = doc(firestore, 'users', uid);
-  await updateDoc(userRef, { ocrQuotaBalance: increment(-1) });
+  await setDoc(userRef, { ocrQuotaBalance: increment(-1) }, { merge: true });
 }
 
 export async function decrementChatQuotaFirestore(uid: string): Promise<void> {
   if (!isFirebaseAvailable || !firestore) return;
   const userRef = doc(firestore, 'users', uid);
-  await updateDoc(userRef, { chatQuotaBalance: increment(-1) });
+  await setDoc(userRef, { chatQuotaBalance: increment(-1) }, { merge: true });
 }
 
 // プラン更新
 export async function updatePlan(uid: string, plan: SubscriptionPlan): Promise<void> {
   if (!isFirebaseAvailable || !firestore) return;
   const userRef = doc(firestore, 'users', uid);
-  await updateDoc(userRef, { plan });
+  await setDoc(userRef, { plan }, { merge: true });
 }
 
-// 初回コイン要求
-export async function requestInitialCoins(uid: string, deviceId: string): Promise<void> {
-  if (!isFirebaseAvailable || !firestore) return;
-  const userRef = doc(firestore, 'users', uid);
-  await updateDoc(userRef, {
-    initialCoinStatus: 'requested',
-    deviceId,
-  });
-}
-
-// ユーザー情報の再取得
+// ユーザー情報の再取得（月次リセットチェック付き）
 export async function refreshUser(uid: string): Promise<User | null> {
   if (!isFirebaseAvailable || !auth || !firestore) return null;
   const currentUser = auth.currentUser;
   if (!currentUser) return null;
 
   try {
+    // 月次リセットが必要かチェック＆実行
+    await checkAndResetMonthly(uid);
+
     const userRef = doc(firestore, 'users', uid);
     const snap = await withTimeout(getDoc(userRef), 10000, 'refreshUser timed out');
     if (!snap.exists()) return null;
@@ -431,13 +582,72 @@ export async function refreshUser(uid: string): Promise<User | null> {
       ocrQuotaBalance: data.ocrQuotaBalance || 0,
       chatQuotaBalance: data.chatQuotaBalance || 0,
       planResetDate: data.planResetDate || new Date().toISOString(),
-      initialCoinStatus: (data.initialCoinStatus as InitialCoinStatus) || 'none',
-      initialCoinCouponCode: data.initialCoinCouponCode || undefined,
-      deviceId: data.deviceId || undefined,
     };
   } catch (e) {
     console.warn('[Auth] refreshUser failed:', e);
     return null;
+  }
+}
+
+// 月次リセットチェック＆実行
+async function checkAndResetMonthly(uid: string): Promise<void> {
+  if (!isFirebaseAvailable || !auth || !firestore) return;
+
+  try {
+    const userRef = doc(firestore, 'users', uid);
+    const snap = await getDoc(userRef);
+    if (!snap.exists()) return;
+
+    const data = snap.data();
+    const planResetDate = data.planResetDate;
+
+    // planResetDateがない、または月が変わっている場合はCloud Functionを呼び出し
+    if (!planResetDate) {
+      await callResetMonthlyFunction(uid);
+      return;
+    }
+
+    const resetDate = new Date(planResetDate);
+    const now = new Date();
+    const isMonthChanged =
+      resetDate.getFullYear() !== now.getFullYear() ||
+      resetDate.getMonth() !== now.getMonth();
+
+    if (isMonthChanged) {
+      await callResetMonthlyFunction(uid);
+    }
+  } catch (e) {
+    console.warn('[Auth] checkAndResetMonthly failed:', e);
+  }
+}
+
+// Cloud Functionを呼び出して月次リセット実行
+async function callResetMonthlyFunction(uid: string): Promise<void> {
+  if (!auth?.currentUser) return;
+
+  try {
+    const token = await auth.currentUser.getIdToken();
+    const response = await fetch(
+      'https://resetmonthlyusageifneeded-ztboupv3ja-uc.a.run.app',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({}),
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.warn('[Auth] resetMonthlyUsageIfNeeded failed:', errorText);
+    } else {
+      const result = await response.json();
+      console.log('[Auth] resetMonthlyUsageIfNeeded result:', result);
+    }
+  } catch (e) {
+    console.warn('[Auth] callResetMonthlyFunction failed:', e);
   }
 }
 
@@ -578,19 +788,27 @@ export async function addFirestoreCoinTransaction(
   if (!isFirebaseAvailable || !firestore) return null;
   try {
     const now = new Date().toISOString();
-    const txRef = collection(firestore, 'users', uid, 'coinTransactions');
-    const docRef = await addDoc(txRef, {
-      type,
-      amount,
-      description,
-      createdAt: now,
-    });
 
-    // 残高を更新（atomicにincrement）
+    // 残高を更新（atomicにincrement）— これが最重要
     const userRef = doc(firestore, 'users', uid);
-    await updateDoc(userRef, { coinBalance: increment(amount) });
+    await setDoc(userRef, { coinBalance: increment(amount) }, { merge: true });
 
-    return { id: docRef.id, type, amount, description, createdAt: now };
+    // 取引履歴の記録（失敗しても残高は既に更新済み）
+    let txId = '';
+    try {
+      const txRef = collection(firestore, 'users', uid, 'coinTransactions');
+      const docRef = await addDoc(txRef, {
+        type,
+        amount,
+        description,
+        createdAt: now,
+      });
+      txId = docRef.id;
+    } catch (txError) {
+      console.warn('[Coins] coinTransaction記録失敗（残高は更新済み）:', txError);
+    }
+
+    return { id: txId, type, amount, description, createdAt: now };
   } catch (e) {
     console.warn('[Coins] addFirestoreCoinTransaction failed:', e);
     return null;

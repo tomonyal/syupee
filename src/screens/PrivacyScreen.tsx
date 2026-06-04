@@ -65,7 +65,7 @@ export default function PrivacyScreen() {
         【利用する外部サービス】{'\n'}
         ・Google LLC - 認証、AI応答生成{'\n'}
         ・Microsoft Corporation - 文字認識処理{'\n'}
-        ・Stripe, Inc. - 決済処理
+        ・Apple Inc. - アプリ内課金処理
       </Text>
 
       <Text style={styles.heading}>4. データの保存と管理</Text>

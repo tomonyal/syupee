@@ -25,7 +25,7 @@ export default function ScanScreen() {
   const cameraRef = useRef<CameraView>(null);
   const navigation = useNavigation<any>();
   const isFocused = useIsFocused();
-  const { user } = useAuthStore();
+  const { user, refresh } = useAuthStore();
   const { addExpense } = useExpenseStore();
   const { balance, ocrQuotaBalance, canScan, useForScan, loadCoinData } = useCoinStore();
   const { ocrUsedThisMonth, loadUsage } = useUsageStore();
@@ -41,10 +41,10 @@ export default function ScanScreen() {
     setParsedReceipt,
   } = useScanStore();
 
-  // 画面フォーカス時に使用回数を読み込み
+  // 画面フォーカス時にFirestoreから最新データを取得してから使用回数を読み込み
   useFocusEffect(
     useCallback(() => {
-      loadUsage();
+      refresh().then(() => loadUsage());
     }, [])
   );
 
@@ -174,7 +174,7 @@ export default function ScanScreen() {
         <Text style={styles.permissionText}>
           レシートを撮影するにはカメラの許可が必要です
         </Text>
-        <Button title="カメラを許可する" onPress={requestPermission} />
+        <Button title="次へ" onPress={requestPermission} />
       </View>
     );
   }

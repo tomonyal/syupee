@@ -35,7 +35,7 @@ export const PLANS: PlanInfo[] = [
     price: 300,
     ocrLimit: 30,
     chatLimit: 10,
-    description: 'お気軽に始めたい方に',
+    description: 'お気軽に始めたい方に（初月無料）',
   },
   {
     key: 'standard',

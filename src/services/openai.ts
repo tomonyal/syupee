@@ -310,15 +310,11 @@ async function callGemini(
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
-
-    const response = await fetch(url, {
+    const fetchPromise = fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      signal: controller.signal,
       body: JSON.stringify({
         system_instruction: {
           parts: [{ text: systemInstruction }],
@@ -335,6 +331,10 @@ async function callGemini(
         },
       }),
     });
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('リクエストがタイムアウトしました')), 30000)
+    );
+    const response = await Promise.race([fetchPromise, timeoutPromise]);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -344,9 +344,12 @@ async function callGemini(
         const errorJson = JSON.parse(errorText);
         const errorDetails = errorJson.error?.message || errorText;
         
-        // RESOURCE_EXHAUSTEDエラーの詳細チェック
         if (errorDetails.includes('RESOURCE_EXHAUSTED') || errorDetails.includes('quota')) {
           errorMessage = 'AIサーバーが混雑しています。しばらく時間をおいてから再度お試しください🙏';
+        } else if (errorDetails.includes('API key not valid') || errorDetails.includes('API_KEY_INVALID') || response.status === 400) {
+          errorMessage = `AI設定エラー (400): ${errorDetails}`;
+        } else {
+          errorMessage = errorDetails;
         }
       } catch {
         errorMessage = errorText;
@@ -381,10 +384,8 @@ async function callGemini(
       throw new Error('Gemini APIから応答が得られませんでした');
     }
 
-    clearTimeout(timeoutId);
     return text;
   } catch (error: any) {
-    clearTimeout(timeoutId);
     // ネットワークエラーなどの場合もリトライ
     if (retryCount < MAX_RETRIES && error.message.includes('fetch')) {
       const delay = BASE_DELAY * Math.pow(2, retryCount);

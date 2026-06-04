@@ -1,4 +1,4 @@
-export { initFirebase, signInWithGoogle, signOut, incrementOCRUsage, incrementChatUsage, updatePlan, refreshUser, onAuthChange, getCurrentFirebaseUser } from './firebase';
+export { initFirebase, signInWithGoogle, signInWithApple, signOut, incrementOCRUsage, incrementChatUsage, updatePlan, refreshUser, onAuthChange, getCurrentFirebaseUser } from './firebase';
 export { recognizeReceipt } from './ocr';
 export { parseReceiptText, getAIChatResponse, allocateBudgetByAI, getDailyAdvice } from './openai';
 export {
@@ -13,5 +13,4 @@ export {
   getPlanFromPurchaseResult,
   restorePurchases,
   cancelSubscription,
-  getCustomerPortalUrl,
 } from './purchases';

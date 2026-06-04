@@ -1,11 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { StripeProvider } from '@stripe/stripe-react-native';
 import { AppNavigator } from './src/navigation';
-import { initFirebase, onAuthChange, refreshUser } from './src/services/firebase';
+import { initFirebase, onAuthChange, refreshUser, getFirebaseStatus } from './src/services/firebase';
 import { initializePurchases, loginPurchaseUser } from './src/services/purchases';
-import { STRIPE_CONFIG } from './src/services/config';
 import { getDatabase } from './src/database';
 import { useAuthStore } from './src/store';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
@@ -23,6 +21,13 @@ export default function App() {
     try {
       // Firebase初期化
       initFirebase();
+      
+      // Firebase状態をログに出力（デバッグ用）
+      const fbStatus = getFirebaseStatus();
+      console.log('[App] Firebase Status:', JSON.stringify(fbStatus, null, 2));
+      if (!fbStatus.isAvailable) {
+        console.error('[App] ⚠️ Firebase is NOT available! Init error:', fbStatus.initError);
+      }
 
       // DB初期化
       await getDatabase();
@@ -34,7 +39,7 @@ export default function App() {
             const user = await refreshUser(firebaseUser.uid);
             setUser(user);
 
-            // Stripe初期化（ユーザーが認証済みの場合）
+            // IAP初期化（ユーザーが認証済みの場合）
             await initializePurchases(firebaseUser.uid);
             await loginPurchaseUser(firebaseUser.uid);
           } else {
@@ -64,14 +69,8 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <StripeProvider
-        publishableKey={STRIPE_CONFIG.publishableKey}
-        merchantIdentifier={STRIPE_CONFIG.merchantIdentifier}
-        urlScheme="syupee"
-      >
-        <StatusBar style="light" />
-        <AppNavigator />
-      </StripeProvider>
+      <StatusBar style="light" />
+      <AppNavigator />
     </SafeAreaProvider>
   );
 }

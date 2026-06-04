@@ -5,15 +5,20 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if request.auth != null && request.auth.uid == userId;
       allow write: if request.auth != null && request.auth.uid == userId
-        // plan フィールドはクライアントから不正な値に変更できないようにする
+        // plan フィールドはクライアントから変更不可（Cloud Functionsのみ更新可能）
         && (!('plan' in request.resource.data) 
-            || request.resource.data.plan == resource.data.plan
-            || request.resource.data.plan in ['free', 'light', 'standard', 'premium'])
+            || !('plan' in resource.data)
+            || request.resource.data.plan == resource.data.plan)
         // 使用量カウンタは減少させられない（リセットはCloud Functions経由のみ）
+        // resource.dataが存在しない場合（初回書き込み）は0として扱う
         && (!('ocrUsedThisMonth' in request.resource.data) 
-            || request.resource.data.ocrUsedThisMonth >= resource.data.ocrUsedThisMonth)
+            || request.resource.data.ocrUsedThisMonth >= (resource.data.get('ocrUsedThisMonth', 0)))
         && (!('chatUsedThisMonth' in request.resource.data)
-            || request.resource.data.chatUsedThisMonth >= resource.data.chatUsedThisMonth)
+            || request.resource.data.chatUsedThisMonth >= (resource.data.get('chatUsedThisMonth', 0)))
+        // コイン残高はクライアントから増加不可（消費のみ許可、加算はCloud Functions経由）
+        && (!('coinBalance' in request.resource.data)
+            || !('coinBalance' in resource.data)
+            || request.resource.data.coinBalance <= resource.data.coinBalance)
         // コイン残高は0以上を維持
         && (!('coinBalance' in request.resource.data)
             || request.resource.data.coinBalance >= 0)
@@ -23,9 +28,19 @@ service cloud.firestore {
         && (!('chatQuotaBalance' in request.resource.data)
             || request.resource.data.chatQuotaBalance >= 0);
       
-      // サブコレクション（coinTransactions等）
+      // コイン取引履歴：消費記録のみクライアントから書き込み可（購入・ボーナスはCloud Functions経由）
+      match /coinTransactions/{txId} {
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow create: if request.auth != null && request.auth.uid == userId
+          && request.resource.data.type == 'use'
+          && request.resource.data.amount < 0;
+        allow update, delete: if false;
+      }
+      
+      // その他サブコレクション：読み取りのみ
       match /{subcollection=**} {
-        allow read, write: if request.auth != null && request.auth.uid == userId;
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow write: if false;
       }
     }
 
@@ -38,11 +53,6 @@ service cloud.firestore {
 
     // 不正利用アラート：Cloud Functions のみ書き込み（クライアントは読み書き不可）
     match /abuseAlerts/{alertId} {
-      allow read, write: if false;
-    }
-
-    // クーポン：Cloud Functions のみ操作（クライアントは読み書き不可）
-    match /coupons/{code} {
       allow read, write: if false;
     }
 

@@ -18,10 +18,10 @@ AI家計簿アプリ。レシート撮影（OCR）とAIチャットで支出管�
 | 言語 | TypeScript |
 | ローカルDB | SQLite (expo-sqlite) |
 | サーバーDB | Firestore |
-| 認証 | Firebase Auth + Google Sign-In |
+| 認証 | Firebase Auth + Google Sign-In + Sign in with Apple |
 | OCR | Azure AI Vision (`jp-instance.cognitiveservices.azure.com`) |
 | AI | Google Gemini API (`generativelanguage.googleapis.com`) ※ファイル名は`openai.ts`だがGemini使用 |
-| 決済 | Stripe (テストモード) |
+| 決済 | Apple In-App Purchase (react-native-iap) |
 | バックエンド | Firebase Cloud Functions 2nd Gen (Node.js 20) |
 | 状態管理 | Zustand |
 | ビルド | EAS Build |
@@ -60,45 +60,38 @@ functions/src/        # Firebase Cloud Functions
 - デフォルトプランは `'free'`（すべてのフォールバック）
 - `SubscriptionPlan` 型: `'free' | 'light' | 'standard' | 'premium'`
 - PLANS定義: `src/constants/categories.ts`
-- Stripe価格はPLANS定数と一致していること（過去に不一致バグあり）
+- App Store Connectの価格はPLANS定数と一致させること（過去に不一致バグあり）
 
 ### Firestore コレクション
-- `users/{uid}` — plan, ocrUsedThisMonth, chatUsedThisMonth, ocrQuotaBalance, chatQuotaBalance, coinBalance, stripeCustomerId, stripeSubscriptionId, initialCoinStatus, initialCoinCouponCode, deviceId
+- `users/{uid}` — plan, ocrUsedThisMonth, chatUsedThisMonth, ocrQuotaBalance, chatQuotaBalance, coinBalance, appleOriginalTransactionId, appleSubscriptionExpiresAt
 - `users/{uid}/coinTransactions/{txId}` — コイン取引履歴
-- `coupons/{code}` — クーポンコード（coinAmount, used, usedBy, usedAt）※クライアントからアクセス不可
 - `seasonStats/{uid}_{seasonId}` — シーズンスキャン統計
 - `abuseAlerts/{alertId}` — 不正利用検知ログ（クライアントからアクセス不可）
-
-### 初回コインステータス (`initialCoinStatus`)
-- `none` — 未申請（デフォルト）
-- `requested` — ユーザーが申請済み（deviceId保存済み）
-- `issued` — 管理者がクーポン発行済み（initialCoinCouponCode設定済み）
-- `redeemed` — ユーザーがクーポン使用済み（redeemCoupon内で自動更新）
 
 ### Firestore 使用量の更新
 - `incrementOCRUsage` / `incrementChatUsage` は **`increment(1)`** を使用（アトミック）
 - getDoc → +1 → updateDoc パターンは**使わない**（競合状態の原因）
 
 ### 認証
-- Google Sign-Inのみ（Email/Password認証なし）
+- Google Sign-In + Sign in with Apple（Email/Password認証なし）
+- Apple Sign-Inは `expo-apple-authentication` を使用
 - アカウント削除時は `reauthenticateWithCredential` が必要（`auth/requires-recent-login` エラー対策）
 - `@react-native-google-signin/google-signin` は動的import（Expo Goでは利用不可）
 
-### 決済 (Stripe)
-- Cloud Functions経由でStripe APIを呼ぶ
-- コイン購入: クライアントからPaymentIntent作成 → PaymentSheet表示 → Webhook(`payment_intent.succeeded`)でFirestore更新
-- サブスク: クライアントからSubscription作成 → Webhook(`customer.subscription.created/updated/deleted`)でFirestore更新
-- 解約: クライアント + Cloud Function + Webhook の三重でFirestore更新
+### 決済 (Apple IAP)
+- `react-native-iap` でStoreKit連携
+- コイン購入: クライアントでIAP購入 → Cloud FunctionでAppleレシート検証 → Firestore更新
+- サブスク: クライアントでIAPサブスク購入 → Cloud FunctionでAppleレシート検証 → Firestore更新
+- 解約: iOSの「設定」アプリからユーザーがキャンセル
+- Apple App Store Connect で商品登録が必要（Product ID: `com.syupee.plan.*`, `com.syupee.coin.*`）
 
-## Cloud Functions (11関数)
+## Cloud Functions (6関数)
 
-HTTP関数 10個 + Firestoreトリガー 1個。すべて `us-central1` リージョン。
+HTTP関数 5個 + Firestoreトリガー 1個。すべて `us-central1` リージョン。
 
 ```
-stripeCreateOrGetCustomer, stripeGetProducts, stripeCreateCoinPaymentIntent,
-stripeCreateSubscription, stripeGetCurrentPlan, stripeRestorePurchases,
-stripeCancelSubscription, stripeCreatePortalSession, stripeWebhook,
-redeemCoupon, detectAbuseOnUserUpdate (Firestoreトリガー)
+validateAppleReceipt, getCurrentPlan, restoreApplePurchases,
+resetMonthlyUsageIfNeeded, detectAbuseOnUserUpdate (Firestoreトリガー)
 ```
 
 ## よく使うコマンド
@@ -140,12 +133,6 @@ node -e "const admin=require('firebase-admin');admin.initializeApp({credential:a
 ※ Admin SDKキー: `syupee-ebfaa-firebase-adminsdk-fbsvc-9bc992ad1c.json`（gitignore済み）
 ※ 古い `syupee-ebfaa-7c15a19bdf2d.json` は `revenuecat@` 用でFirestore権限なし
 
-### Stripe データ確認
-```powershell
-cd y:\project\syupee\functions
-node -e "require('dotenv').config();const Stripe=require('stripe');const stripe=new Stripe(process.env.STRIPE_SECRET_KEY);(async()=>{const subs=await stripe.subscriptions.list({customer:'CUSTOMER_ID',limit:5});subs.data.forEach(s=>console.log(JSON.stringify({id:s.id,status:s.status,plan:s.metadata?.planKey},null,2)));process.exit(0)})()"
-```
-
 ## セキュリティ
 
 ### Firestore ルール (`firestore.rules`)
@@ -174,7 +161,7 @@ node -e "require('dotenv').config();const Stripe=require('stripe');const stripe=
 
 | 問題 | 原因 | 解決 |
 |------|------|------|
-| Stripe価格とアプリ表示不一致 | PLANS定数の価格がStripe実額と異なっていた | Stripe APIで実価格を確認し定数を修正 |
+| IAP価格とアプリ表示不一致 | PLANS定数の価格が実額と異なっていた | App Store Connectで実価格を確認し定数を修正 |
 | アカウント削除失敗 | `auth/requires-recent-login` | `reauthenticateWithCredential` でGoogle再認証後に削除 |
 | 使用量カウンタの競合 | `getDoc → +1 → updateDoc` | `increment(1)` に変更 |
 | Firestoreトリガーデプロイ失敗 | Eventarc Service Agent 権限未伝播 | 数分待って再デプロイ |
@@ -185,7 +172,6 @@ node -e "require('dotenv').config();const Stripe=require('stripe');const stripe=
 
 - UID: `30cP0IV8Y6YkveqZN5DvlfwKG5h1`
 - Email: `tomoya1224smilebasic65@gmail.com`
-- Stripe Customer: Firestoreの `stripeCustomerId` フィールドを参照
 
 ## 開発ルール
 

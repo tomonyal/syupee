@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { User, Expense, MonthlySummary, ChatMessage, MonthlyBudget, CategoryBudget, CoinTransaction, UserRank } from '../types';
 import {
   signInWithGoogle,
+  signInWithApple,
   signOut as firebaseSignOut,
   deleteAccount as firebaseDeleteAccount,
   refreshUser,
@@ -11,7 +12,6 @@ import {
   incrementChatQuotaFirestore,
   decrementOCRQuotaFirestore,
   decrementChatQuotaFirestore,
-  updatePlan,
 } from '../services/firebase';
 import {
   getRecentExpenses,
@@ -62,7 +62,7 @@ import {
   getCurrentPlan,
   getPlanFromPurchaseResult,
   restorePurchases,
-  cancelSubscription as stripeCancelSubscription,
+  cancelSubscription,
   CoinOffering,
   PlanOffering,
 } from '../services/purchases';
@@ -81,6 +81,7 @@ interface AuthState {
   isLoading: boolean;
   isAuthenticated: boolean;
   signIn: () => Promise<void>;
+  signInApple: () => Promise<void>;
   signOut: () => Promise<void>;
   deleteAccount: () => Promise<void>;
   refresh: () => Promise<void>;
@@ -98,7 +99,30 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const user = await signInWithGoogle();
       set({ user, isAuthenticated: true, isLoading: false });
 
-      // Stripe初期化 & ユーザー紐づけ
+      // IAP初期化 & ユーザー紐づけ
+      await initializePurchases(user.uid);
+      await loginPurchaseUser(user.uid);
+
+      // ストアのサブスク状態を反映
+      if (isPurchasesAvailable()) {
+        const plan = await getCurrentPlan();
+        if (plan !== user.plan) {
+          set({ user: { ...user, plan } });
+        }
+      }
+    } catch (error) {
+      set({ isLoading: false });
+      throw error;
+    }
+  },
+
+  signInApple: async () => {
+    set({ isLoading: true });
+    try {
+      const user = await signInWithApple();
+      set({ user, isAuthenticated: true, isLoading: false });
+
+      // IAP初期化 & ユーザー紐づけ
       await initializePurchases(user.uid);
       await loginPurchaseUser(user.uid);
 
@@ -134,7 +158,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       // サブスクがあればキャンセル
       if (user.plan !== 'free') {
-        try { await stripeCancelSubscription(); } catch (e) {
+        try { await cancelSubscription(); } catch (e) {
           console.warn('[Account] サブスク解約失敗（続行）:', e);
         }
       }
@@ -151,7 +175,15 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const { user } = get();
     if (!user) return;
     const refreshed = await refreshUser(user.uid);
-    if (refreshed) set({ user: refreshed });
+    if (refreshed) {
+      // 使用量はローカルの方が大きければそれを保持（increment()の反映遅延対策）
+      const mergedUser = {
+        ...refreshed,
+        ocrUsedThisMonth: Math.max(user.ocrUsedThisMonth || 0, refreshed.ocrUsedThisMonth || 0),
+        chatUsedThisMonth: Math.max(user.chatUsedThisMonth || 0, refreshed.chatUsedThisMonth || 0),
+      };
+      set({ user: mergedUser });
+    }
   },
 
   setUser: (user) => set({ user, isAuthenticated: !!user }),
@@ -295,6 +327,15 @@ export const useUsageStore = create<UsageState>((set) => ({
       await incrementLocalOCRUsage();
       // Storeの値を+1（Firestoreのincrement()と同期）
       set((state) => ({ ocrUsedThisMonth: state.ocrUsedThisMonth + 1 }));
+      
+      // AuthStoreのuserデータも即座に更新（refresh()での上書きを防ぐ）
+      const user = useAuthStore.getState().user;
+      if (user) {
+        useAuthStore.getState().setUser({
+          ...user,
+          ocrUsedThisMonth: (user.ocrUsedThisMonth || 0) + 1,
+        });
+      }
     } catch {
       // エラーは無視
     }
@@ -305,6 +346,15 @@ export const useUsageStore = create<UsageState>((set) => ({
       await incrementLocalChatUsage();
       // Storeの値を+1（Firestoreのincrement()と同期）
       set((state) => ({ chatUsedThisMonth: state.chatUsedThisMonth + 1 }));
+      
+      // AuthStoreのuserデータも即座に更新（refresh()での上書きを防ぐ）
+      const user = useAuthStore.getState().user;
+      if (user) {
+        useAuthStore.getState().setUser({
+          ...user,
+          chatUsedThisMonth: (user.chatUsedThisMonth || 0) + 1,
+        });
+      }
     } catch {
       // エラーは無視
     }
@@ -352,9 +402,18 @@ export const useScanStore = create<ScanState>((set, get) => ({
       const parsed = await parseReceiptText(ocrResult.rawText);
       set({ parsedReceipt: parsed, step: 'confirm', isProcessing: false });
 
-      // 使用回数加算（ローカルDB + Firebase）
-      await useUsageStore.getState().incrementOCR();
-      await incrementOCRUsage(uid);
+      // 使用回数加算（ローカルDB + Firebase）— 失敗してもスキャン結果は保持
+      try {
+        await useUsageStore.getState().incrementOCR();
+        await incrementOCRUsage(uid);
+        console.log('[Scan] Usage incremented successfully');
+      } catch (e: any) {
+        console.error('[Scan] Usage increment failed:', e);
+        // Firestore書き込み失敗をユーザーに通知
+        set({ 
+          error: 'サーバーへの記録に失敗しました。ネットワーク接続を確認してください。',
+        });
+      }
     } catch (error: any) {
       set({
         error: error.message || 'レシートの処理に失敗しました',
@@ -407,12 +466,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sendMessage: async (content, uid) => {
     set({ isLoading: true, error: null });
     try {
+      // 直近の会話コンテキストをDB保存前に取得（二重送信防止）
+      const recentMessages = await getRecentChatMessages();
+
       // ユーザーメッセージを保存
       const userMsg = await insertChatMessage('user', content);
       set((state) => ({ messages: [...state.messages, userMsg] }));
-
-      // 直近の会話コンテキストを取得
-      const recentMessages = await getRecentChatMessages();
 
       // AI応答を取得
       const aiResponse = await getAIChatResponse(content, recentMessages);
@@ -424,20 +483,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
         isLoading: false,
       }));
 
-      // 使用回数加算（ローカルDB + Firebase）
-      await useUsageStore.getState().incrementChat();
-      await incrementChatUsage(uid);
+      // 使用回数加算（ローカルDB + Firebase）— 失敗してもチャット結果は保持
+      try {
+        await useUsageStore.getState().incrementChat();
+        await incrementChatUsage(uid);
+        console.log('[Chat] Usage incremented successfully');
+      } catch (e: any) {
+        console.error('[Chat] Usage increment failed:', e);
+        // Firestore書き込み失敗をユーザーに通知
+        set({
+          error: 'サーバーへの記録に失敗しました。ネットワーク接続を確認してください。',
+        });
+      }
     } catch (error: any) {
       const errorMessage = error.message || 'メッセージの送信に失敗しました';
       set({
         isLoading: false,
         error: errorMessage,
       });
-      
-      // 5秒後にエラーメッセージを自動でクリア
-      setTimeout(() => {
-        set({ error: null });
-      }, 5000);
     }
   },
 
@@ -635,7 +698,7 @@ export const useCoinStore = create<CoinState>((set, get) => ({
     }
     set({ isLoading: true, error: null });
     try {
-      // コインを消費して枠を購入（ローカル）
+      // コインを消費（Firestore coinBalance も useCoinsForScan 内で減算される）
       await useCoinsForScan(coinCost);
       await purchaseOCRQuota(quota, coinCost);
       // Firestoreにも枠を加算
@@ -657,7 +720,7 @@ export const useCoinStore = create<CoinState>((set, get) => ({
     }
     set({ isLoading: true, error: null });
     try {
-      // コインを消費して枠を購入（ローカル）
+      // コインを消費（Firestore coinBalance も useCoinsForScan 内で減算される）
       await useCoinsForScan(coinCost);
       await purchaseChatQuota(quota, coinCost);
       // Firestoreにも枠を加算
@@ -733,10 +796,14 @@ export const usePurchaseStore = create<PurchaseState>((set, get) => ({
   error: null,
 
   loadOfferings: async () => {
-    if (!isPurchasesAvailable()) return;
+    if (!isPurchasesAvailable()) {
+      console.warn('[Store] loadOfferings: IAP not available');
+      return;
+    }
     set({ isLoadingOfferings: true, error: null });
     try {
       const result = await getOfferings();
+      console.log('[Store] loadOfferings result:', result ? `coins=${result.coinPackages.length}, plans=${result.planPackages.length}` : 'null');
       if (result) {
         set({
           coinOfferings: result.coinPackages,
@@ -744,9 +811,10 @@ export const usePurchaseStore = create<PurchaseState>((set, get) => ({
           isLoadingOfferings: false,
         });
       } else {
-        set({ isLoadingOfferings: false });
+        set({ isLoadingOfferings: false, error: 'App Storeから商品情報を取得できませんでした' });
       }
     } catch (error: any) {
+      console.error('[Store] loadOfferings error:', error);
       set({ isLoadingOfferings: false, error: error.message });
     }
   },
@@ -794,13 +862,11 @@ export const usePurchaseStore = create<PurchaseState>((set, get) => ({
         return false;
       }
 
-      // 決済成功 → PurchaseResultからプランを判定してユーザー情報を更新
+      // 決済成功 → Cloud Functionsが既にプランを設定済み、ローカル状態を更新
       if (result.plan) {
-        const newPlan = result.plan;
         const user = useAuthStore.getState().user;
         if (user) {
-          useAuthStore.getState().setUser({ ...user, plan: newPlan });
-          await updatePlan(user.uid, newPlan);
+          useAuthStore.getState().setUser({ ...user, plan: result.plan });
         }
       }
 
@@ -818,8 +884,8 @@ export const usePurchaseStore = create<PurchaseState>((set, get) => ({
       const { plan } = await restorePurchases();
       const user = useAuthStore.getState().user;
       if (user && plan !== user.plan) {
+        // Cloud Functionsが既にプランを設定済み、ローカル状態のみ更新
         useAuthStore.getState().setUser({ ...user, plan });
-        await updatePlan(user.uid, plan);
       }
       set({ isPurchasing: false });
     } catch (error: any) {
@@ -828,20 +894,11 @@ export const usePurchaseStore = create<PurchaseState>((set, get) => ({
   },
 
   cancelSubscription: async () => {
-    set({ isPurchasing: true, error: null });
     try {
-      const success = await stripeCancelSubscription();
-      if (success) {
-        const user = useAuthStore.getState().user;
-        if (user) {
-          useAuthStore.getState().setUser({ ...user, plan: 'free' });
-          await updatePlan(user.uid, 'free');
-        }
-      }
-      set({ isPurchasing: false });
+      // Apple管理画面を開くだけ（実際の解約はApple側で行う）
+      const success = await cancelSubscription();
       return success;
     } catch (error: any) {
-      set({ isPurchasing: false, error: error.message });
       return false;
     }
   },

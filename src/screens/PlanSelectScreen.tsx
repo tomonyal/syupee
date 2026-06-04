@@ -76,7 +76,7 @@ export default function PlanSelectScreen() {
     );
   };
 
-  // 開発用フォールバック削除済み - 本番ではStripe経由のみ
+  // Apple IAP経由のプラン購入のみ
 
   // 購入復元
   const handleRestore = async () => {
@@ -106,7 +106,6 @@ export default function PlanSelectScreen() {
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <Text style={styles.header}>あなたにぴったりのプランを選ぼう ✨</Text>
-      <Text style={styles.subheader}>🎁 すべてのプラン初月無料！</Text>
 
       {isPurchasing && (
         <View style={styles.purchasingOverlay}>
@@ -118,6 +117,7 @@ export default function PlanSelectScreen() {
       {PLANS.filter((plan) => plan.key !== 'free').map((plan, idx) => {
         const isCurrentPlan = user?.plan === plan.key;
         const isRecommended = plan.key === 'standard';
+        const isFreeTrial = plan.key === 'light';
         const iapPrice = getPriceForPlan(plan.key);
 
         return (
@@ -134,6 +134,15 @@ export default function PlanSelectScreen() {
                   style={styles.recommendBadge}
                 >
                   <Text style={styles.recommendText}>おすすめ</Text>
+                </LinearGradient>
+              )}
+
+              {isFreeTrial && (
+                <LinearGradient
+                  colors={['#4CAF50', '#66BB6A']}
+                  style={styles.freeTrialBadge}
+                >
+                  <Text style={styles.freeTrialText}>初月無料</Text>
                 </LinearGradient>
               )}
 
@@ -187,9 +196,20 @@ export default function PlanSelectScreen() {
       </TouchableOpacity>
 
       <Text style={styles.note}>
-        ※ 決済はStripeのセキュアな決済システムで処理されます。{'\n'}
-        ※ 無料期間中にキャンセルすれば料金は発生しません。
+        ※ 無料期間中にキャンセルすれば料金は発生しません。{'\n'}
+        ※ サブスクリプションはApple IDに紐づけられます。{'\n'}
+        ※ 期間終了日の24時間前までにキャンセルしない限り自動更新されます。
       </Text>
+
+      <View style={styles.legalLinks}>
+        <TouchableOpacity onPress={() => (navigation as any).navigate('Terms')}>
+          <Text style={styles.legalLinkText}>利用規約</Text>
+        </TouchableOpacity>
+        <Text style={styles.legalSeparator}>|</Text>
+        <TouchableOpacity onPress={() => (navigation as any).navigate('Privacy')}>
+          <Text style={styles.legalLinkText}>プライバシーポリシー</Text>
+        </TouchableOpacity>
+      </View>
 
     </ScrollView>
   );
@@ -220,13 +240,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: SPACING.xs,
   },
-  subheader: {
-    fontSize: FONT_SIZE.md,
-    color: COLORS.primary,
-    textAlign: 'center',
-    fontWeight: '600',
-    marginBottom: SPACING.lg,
-  },
   planCard: {
     backgroundColor: COLORS.surface,
     borderRadius: BORDER_RADIUS.lg,
@@ -249,6 +262,19 @@ const styles = StyleSheet.create({
     borderBottomLeftRadius: BORDER_RADIUS.md,
   },
   recommendText: {
+    fontSize: FONT_SIZE.xs,
+    fontWeight: '700',
+    color: COLORS.textOnPrimary,
+  },
+  freeTrialBadge: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.xs,
+    borderBottomRightRadius: BORDER_RADIUS.md,
+  },
+  freeTrialText: {
     fontSize: FONT_SIZE.xs,
     fontWeight: '700',
     color: COLORS.textOnPrimary,
@@ -335,5 +361,21 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZE.md,
     color: COLORS.primary,
     fontWeight: '600',
+  },
+  legalLinks: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: SPACING.md,
+    gap: SPACING.sm,
+  },
+  legalLinkText: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.primary,
+    textDecorationLine: 'underline',
+  },
+  legalSeparator: {
+    fontSize: FONT_SIZE.sm,
+    color: COLORS.textLight,
   },
 });

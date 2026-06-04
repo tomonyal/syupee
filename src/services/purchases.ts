@@ -1,62 +1,106 @@
+import { Platform } from 'react-native';
 import {
-  initPaymentSheet,
-  presentPaymentSheet,
-} from '@stripe/stripe-react-native';
+  initConnection,
+  endConnection,
+  fetchProducts,
+  requestPurchase,
+  finishTransaction,
+  purchaseUpdatedListener,
+  purchaseErrorListener,
+  getAvailablePurchases,
+  clearTransactionIOS,
+  type Purchase,
+  type PurchaseError,
+  type Product,
+} from 'react-native-iap';
 import { SubscriptionPlan } from '../types';
-import { STRIPE_CONFIG } from './config';
 import { isFirebaseAvailable, getCurrentFirebaseUser } from './firebase';
 
 // ============================
-// Stripe設定
+// App Store Connect Product IDs
 // ============================
 
-// Firebase Cloud Functions のベースURL
-const API_BASE_URL = STRIPE_CONFIG.apiBaseUrl;
-
-// コインパッケージの Stripe Price ID
-export const COIN_PRICE_IDS: Record<string, string> = {
-  coin_50: 'price_1TCqQeQLTQl0iplLMyV8xhCe',
-  coin_100: 'price_1TCqJjQLTQl0iplL4CFMA4HE',
-  coin_300: 'price_1TCqROQLTQl0iplLQSqTVRct',
-  coin_500: 'price_1TCqRhQLTQl0iplLeYOnxGkx',
-  coin_1000: 'price_1TCqS6QLTQl0iplLiJuXs9Y6',
+// サブスクリプション Product ID
+export const PLAN_PRODUCT_IDS: Record<Exclude<SubscriptionPlan, 'free'>, string> = {
+  light: 'com.syupee.sub.light',
+  standard: 'com.syupee.sub.standard',
+  premium: 'com.syupee.sub.premium',
 };
 
-// サブスクリプションの Stripe Price ID
-export const PLAN_PRICE_IDS: Record<SubscriptionPlan, string> = {
-  free: '',
-  light: 'price_1TCqIMQLTQl0iplLj5prm8Rl',
-  standard: 'price_1TCqSnQLTQl0iplLhjqYqJJl',
-  premium: 'price_1TCqT1QLTQl0iplLROTdHl5b',
+// コイン Consumable Product ID
+export const COIN_PRODUCT_IDS: Record<string, string> = {
+  coin_100: 'com.syupee.coin.100',
+  coin_300: 'com.syupee.coin.300',
+  coin_500: 'com.syupee.coin.500',
+  coin_1000: 'com.syupee.coin.1000',
 };
+
+// Product ID → パッケージID の逆引きマップ
+const PRODUCT_TO_PACKAGE: Record<string, string> = {};
+for (const [pkgId, productId] of Object.entries(COIN_PRODUCT_IDS)) {
+  PRODUCT_TO_PACKAGE[productId] = pkgId;
+}
+const PRODUCT_TO_PLAN: Record<string, SubscriptionPlan> = {};
+for (const [planKey, productId] of Object.entries(PLAN_PRODUCT_IDS)) {
+  PRODUCT_TO_PLAN[productId] = planKey as SubscriptionPlan;
+}
+
+// Cloud Functions ベースURL
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || '';
 
 let isInitialized = false;
+let purchaseUpdateSubscription: any = null;
+let purchaseErrorSubscription: any = null;
+
+// リスナーベースの購入完了を待つためのPromiseコールバック
+let pendingPurchaseResolve: ((purchase: Purchase) => void) | null = null;
+let pendingPurchaseReject: ((error: any) => void) | null = null;
 
 // ============================
 // 初期化
 // ============================
 
-/**
- * Stripe SDK初期化フラグをセット
- * 実際の初期化はApp.tsxのStripeProviderで行う
- */
 export async function initializePurchases(userId?: string): Promise<void> {
   if (isInitialized) return;
 
-  const publishableKey = STRIPE_CONFIG.publishableKey;
+  try {
+    const result = await initConnection();
+    isInitialized = true;
+    console.log('[IAP]','IAP初期化', `接続完了: ${JSON.stringify(result).substring(0, 100)}`);
 
-  if (!publishableKey) {
-    console.warn('[Stripe] Publishable Keyが設定されていません。課金機能は無効です。');
-    return;
+    // 未完了トランザクションをクリア（前回の購入が未完了だと次回がブロックされる）
+    try {
+      await clearTransactionIOS();
+      console.log('[IAP]','ClearTx', '未完了トランザクションをクリアしました');
+    } catch (e: any) {
+      console.warn('[IAP] clearTransactionIOS:', e?.message);
+    }
+
+    // 購入成功リスナー
+    purchaseUpdateSubscription = purchaseUpdatedListener(async (purchase: Purchase) => {
+      console.log('[IAP]','Listener: Purchase受信', `productId=${purchase.productId}\ntxId=${purchase.transactionId}\nkeys=${Object.keys(purchase).join(',')}`);
+      if (pendingPurchaseResolve) {
+        pendingPurchaseResolve(purchase);
+        pendingPurchaseResolve = null;
+        pendingPurchaseReject = null;
+      }
+    });
+
+    // 購入エラーリスナー
+    purchaseErrorSubscription = purchaseErrorListener((error: PurchaseError) => {
+      console.log('[IAP]','Listener: Purchaseエラー', `code=${error.code}\nmessage=${error.message}`);
+      if (pendingPurchaseReject) {
+        pendingPurchaseReject(error);
+        pendingPurchaseResolve = null;
+        pendingPurchaseReject = null;
+      }
+    });
+
+  } catch (error: any) {
+    console.log('[IAP]','IAP初期化エラー', `${error?.message || error}`);
   }
-
-  isInitialized = true;
-  console.log('[Stripe] 初期化完了');
 }
 
-/**
- * Stripeが初期化済みかどうか
- */
 export function isPurchasesAvailable(): boolean {
   return isInitialized;
 }
@@ -76,16 +120,22 @@ async function getAuthToken(): Promise<string | null> {
 }
 
 // ============================
-// APIリクエスト
+// APIリクエスト (Cloud Functions)
 // ============================
 
 async function apiRequest(endpoint: string, body: Record<string, unknown>): Promise<any> {
   const token = await getAuthToken();
+  console.log('[IAP]','apiRequest', `endpoint: ${endpoint}\ntoken: ${token ? `${token.substring(0, 20)}...` : 'NULL!'}\nAPI_BASE_URL: ${API_BASE_URL || '(empty)'}`);
   if (!token) {
     throw new Error('認証されていません。ログインしてください。');
   }
+  if (!API_BASE_URL) {
+    throw new Error('API_BASE_URLが設定されていません');
+  }
 
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+  const url = `${API_BASE_URL}${endpoint}`;
+
+  const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -94,36 +144,35 @@ async function apiRequest(endpoint: string, body: Record<string, unknown>): Prom
     body: JSON.stringify(body),
   });
 
+  console.log('[IAP]','API Response', `status: ${response.status}`);
+
   if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.message || `APIエラー (${response.status})`);
+    const errorText = await response.text().catch(() => '');
+    console.log('[IAP]','API Error', `status: ${response.status}\n${errorText.substring(0, 300)}`);
+    let errorMessage = `APIエラー (${response.status})`;
+    try {
+      const errorData = JSON.parse(errorText);
+      errorMessage = errorData.message || errorMessage;
+    } catch {}
+    throw new Error(errorMessage);
   }
 
-  return response.json();
+  const json = await response.json();
+  console.log('[IAP]','API Success', JSON.stringify(json).substring(0, 300));
+  return json;
 }
 
 // ============================
 // ユーザー管理
 // ============================
 
-/**
- * ログインユーザーをStripeに紐づける（Stripe Customerの作成/取得）
- */
 export async function loginPurchaseUser(userId: string): Promise<void> {
-  if (!isInitialized || !isFirebaseAvailable) return;
-  try {
-    await apiRequest('/stripeCreateOrGetCustomer', { userId });
-    console.log('[Stripe] ユーザー紐づけ完了');
-  } catch (error) {
-    console.error('[Stripe] ユーザー紐づけエラー:', error);
-  }
+  // IAP ではユーザー紐づけ不要（Apple ID ベース）
+  console.log('[IAP] ユーザーログイン:', userId);
 }
 
-/**
- * ログアウト時の処理
- */
 export async function logoutPurchaseUser(): Promise<void> {
-  console.log('[Stripe] ログアウト処理完了');
+  console.log('[IAP] ユーザーログアウト');
 }
 
 // ============================
@@ -132,7 +181,7 @@ export async function logoutPurchaseUser(): Promise<void> {
 
 export interface CoinOffering {
   packageId: string;
-  priceId: string;
+  productId: string;
   localizedPrice: string;
   price: number;
   currencyCode: string;
@@ -140,7 +189,7 @@ export interface CoinOffering {
 
 export interface PlanOffering {
   planKey: SubscriptionPlan;
-  priceId: string;
+  productId: string;
   localizedPrice: string;
   price: number;
   currencyCode: string;
@@ -150,43 +199,55 @@ export interface PlanOffering {
 // オファリング取得
 // ============================
 
-/**
- * 利用可能な商品情報をサーバーから取得
- */
 export async function getOfferings(): Promise<{
   coinPackages: CoinOffering[];
   planPackages: PlanOffering[];
 } | null> {
-  if (!isInitialized || !isFirebaseAvailable) return null;
+  if (!isInitialized) {
+    console.warn('[IAP] getOfferings: not initialized');
+    return null;
+  }
 
   try {
-    const result = await apiRequest('/stripeGetProducts', {});
+    const coinProductIds = Object.values(COIN_PRODUCT_IDS);
+    const planProductIds = Object.values(PLAN_PRODUCT_IDS);
+    console.log('[IAP] Requesting coins:', JSON.stringify(coinProductIds));
+    console.log('[IAP] Requesting subs:', JSON.stringify(planProductIds));
 
-    const coinPackages: CoinOffering[] = (result.coinProducts || []).map((p: any) => ({
-      packageId: p.packageId,
-      priceId: p.priceId,
-      localizedPrice: p.localizedPrice,
-      price: p.price,
-      currencyCode: p.currencyCode || 'JPY',
+    const [coinProducts, planProducts] = await Promise.all([
+      fetchProducts({ skus: coinProductIds }),
+      fetchProducts({ skus: planProductIds, type: 'subs' }),
+    ]);
+
+    console.log('[IAP] coinProducts count:', coinProducts.length);
+    console.log('[IAP] planProducts count:', planProducts.length);
+
+    const coinPackages: CoinOffering[] = coinProducts.map((p: Product) => ({
+      packageId: PRODUCT_TO_PACKAGE[p.id] || p.id,
+      productId: p.id,
+      localizedPrice: p.displayPrice || `¥${p.price}`,
+      price: p.price || 0,
+      currencyCode: p.currency || 'JPY',
     }));
 
-    const planPackages: PlanOffering[] = (result.planProducts || []).map((p: any) => ({
-      planKey: p.planKey as SubscriptionPlan,
-      priceId: p.priceId,
-      localizedPrice: p.localizedPrice,
-      price: p.price,
-      currencyCode: p.currencyCode || 'JPY',
+    const planPackages: PlanOffering[] = planProducts.map((p: Product) => ({
+      planKey: PRODUCT_TO_PLAN[p.id] || ('free' as SubscriptionPlan),
+      productId: p.id,
+      localizedPrice: p.displayPrice || `¥${p.price}`,
+      price: p.price || 0,
+      currencyCode: p.currency || 'JPY',
     }));
 
+    console.log('[IAP] Final: coins=', coinPackages.length, 'plans=', planPackages.length);
     return { coinPackages, planPackages };
-  } catch (error) {
-    console.error('[Stripe] 商品情報取得エラー:', error);
+  } catch (error: any) {
+    console.error('[IAP] 商品情報取得エラー:', error?.message || error, JSON.stringify(error));
     return null;
   }
 }
 
 // ============================
-// コイン購入（一回払い）
+// コイン購入（Consumable）
 // ============================
 
 export interface PurchaseResult {
@@ -197,49 +258,85 @@ export interface PurchaseResult {
 }
 
 /**
- * コインパッケージを購入（Stripe PaymentSheet使用）
+ * リスナー経由で購入結果を待つ。
+ * requestPurchase はStoreKit 2ではPurchaseオブジェクトを返さないため、
+ * purchaseUpdatedListener からの通知をPromiseで受け取る。
  */
+function waitForPurchase(timeoutMs: number = 120000): Promise<Purchase> {
+  return new Promise<Purchase>((resolve, reject) => {
+    pendingPurchaseResolve = resolve;
+    pendingPurchaseReject = reject;
+
+    // タイムアウト
+    setTimeout(() => {
+      if (pendingPurchaseResolve) {
+        pendingPurchaseResolve = null;
+        pendingPurchaseReject = null;
+        reject({ code: 'E_USER_CANCELLED', message: '購入がキャンセルまたはタイムアウトしました' });
+      }
+    }, timeoutMs);
+  });
+}
+
 export async function purchaseCoinPackage(offering: CoinOffering): Promise<PurchaseResult> {
-  if (!isInitialized || !isFirebaseAvailable) {
-    return { success: false, error: 'Payment service is not initialized' };
+  if (!isInitialized) {
+    return { success: false, error: 'IAP is not initialized' };
   }
 
+  let p: Purchase | null = null;
   try {
-    // 1. サーバーからPaymentIntentを作成
-    const { paymentIntent, ephemeralKey, customer } = await apiRequest(
-      '/stripeCreateCoinPaymentIntent',
-      {
-        priceId: offering.priceId,
-        packageId: offering.packageId,
-      }
-    );
+    console.log('[IAP]','Coin購入開始', `productId: ${offering.productId}`);
 
-    // 2. PaymentSheetを初期化
-    const { error: initError } = await initPaymentSheet({
-      paymentIntentClientSecret: paymentIntent,
-      customerEphemeralKeySecret: ephemeralKey,
-      customerId: customer,
-      merchantDisplayName: 'Syupee',
-      style: 'automatic',
-      returnURL: 'syupee://stripe-redirect',
+    // リスナーからの購入結果を待つPromiseを先にセット
+    const purchasePromise = waitForPurchase();
+
+    // 購入リクエスト開始（StoreKit 2では結果を直接返さない）
+    requestPurchase({
+      request: { apple: { sku: offering.productId } },
+      type: 'in-app',
+    }).catch((err: any) => {
+      // キャンセルはリスナー経由ではなくここで来る場合がある
+      if (pendingPurchaseReject) {
+        pendingPurchaseReject(err);
+        pendingPurchaseResolve = null;
+        pendingPurchaseReject = null;
+      }
     });
 
-    if (initError) {
-      return { success: false, error: initError.message };
-    }
+    // リスナーからの購入結果を待つ
+    p = await purchasePromise;
+    console.log('[IAP]','Purchase完了', `productId=${p.productId}\ntxId=${p.transactionId}`);
 
-    // 3. PaymentSheetを表示
-    const { error: presentError } = await presentPaymentSheet();
+    // StoreKit 2: トランザクション情報をサーバーに送信（getReceiptIOSは使わない — Appleサインイン要求が発生するため）
+    const transactionId = p.transactionId;
+    console.log('[IAP]','Transaction', `id: ${transactionId}`);
 
-    if (presentError) {
-      if (presentError.code === 'Canceled') {
-        return { success: false, cancelled: true };
+    // サーバーで検証
+    const result = await apiRequest('/validateAppleReceipt', {
+      transactionId,
+      productId: p.productId,
+      packageId: offering.packageId,
+      type: 'coin',
+    });
+
+    if (result?.success) {
+      // 検証成功時のみトランザクションを完了（失敗時はリトライ可能にする）
+      try {
+        await finishTransaction({ purchase: p, isConsumable: true });
+        console.log('[IAP]','FinishTx', '完了');
+      } catch (finishErr: any) {
+        console.log('[IAP]','FinishTxエラー', finishErr?.message || '');
       }
-      return { success: false, error: presentError.message };
+      return { success: true };
+    } else {
+      return { success: false, error: result?.message || '検証に失敗しました' };
     }
-
-    return { success: true };
   } catch (error: any) {
+    console.log('[IAP]','Coin購入エラー', `message: ${error?.message}\ncode: ${error?.code}`);
+    // サーバー検証失敗時はfinishTransactionを呼ばない（リトライ可能にする）
+    if (error?.code === 'E_USER_CANCELLED') {
+      return { success: false, cancelled: true };
+    }
     return { success: false, error: error.message || '購入に失敗しました' };
   }
 }
@@ -248,55 +345,64 @@ export async function purchaseCoinPackage(offering: CoinOffering): Promise<Purch
 // サブスクリプション購入
 // ============================
 
-/**
- * プランサブスクリプションを購入（Stripe PaymentSheet使用）
- */
 export async function purchasePlanSubscription(offering: PlanOffering): Promise<PurchaseResult> {
-  if (!isInitialized || !isFirebaseAvailable) {
-    return { success: false, error: 'Payment service is not initialized' };
+  if (!isInitialized) {
+    return { success: false, error: 'IAP is not initialized' };
   }
 
+  let p: Purchase | null = null;
   try {
-    // 1. サーバーからSubscriptionを作成
-    const { paymentIntent, ephemeralKey, customer, activated } = await apiRequest(
-      '/stripeCreateSubscription',
-      {
-        priceId: offering.priceId,
-        planKey: offering.planKey,
+    console.log('[IAP]','Plan購入開始', `productId: ${offering.productId}\nplanKey: ${offering.planKey}`);
+
+    // リスナーからの購入結果を待つPromiseを先にセット
+    const purchasePromise = waitForPurchase();
+
+    // 購入リクエスト開始
+    requestPurchase({
+      request: { apple: { sku: offering.productId } },
+      type: 'subs',
+    }).catch((err: any) => {
+      if (pendingPurchaseReject) {
+        pendingPurchaseReject(err);
+        pendingPurchaseResolve = null;
+        pendingPurchaseReject = null;
       }
-    );
-
-    // サーバー側で即時アクティブ化された場合（無料プラン等）
-    if (activated) {
-      return { success: true, plan: offering.planKey };
-    }
-
-    // 2. PaymentSheetを初期化
-    const { error: initError } = await initPaymentSheet({
-      paymentIntentClientSecret: paymentIntent,
-      customerEphemeralKeySecret: ephemeralKey,
-      customerId: customer,
-      merchantDisplayName: 'Syupee',
-      style: 'automatic',
-      returnURL: 'syupee://stripe-redirect',
     });
 
-    if (initError) {
-      return { success: false, error: initError.message };
-    }
+    // リスナーからの購入結果を待つ
+    p = await purchasePromise;
+    console.log('[IAP]','Purchase完了', `productId=${p.productId}\ntxId=${p.transactionId}`);
 
-    // 3. PaymentSheetを表示
-    const { error: presentError } = await presentPaymentSheet();
+    // StoreKit 2: トランザクション情報をサーバーに送信
+    const transactionId = p.transactionId;
+    console.log('[IAP]','Transaction', `id: ${transactionId}`);
 
-    if (presentError) {
-      if (presentError.code === 'Canceled') {
-        return { success: false, cancelled: true };
+    // サーバーで検証
+    const result = await apiRequest('/validateAppleReceipt', {
+      transactionId,
+      productId: p.productId,
+      planKey: offering.planKey,
+      type: 'subscription',
+    });
+
+    if (result?.success) {
+      // 検証成功時のみトランザクションを完了
+      try {
+        await finishTransaction({ purchase: p, isConsumable: false });
+        console.log('[IAP]','FinishTx', '完了');
+      } catch (finishErr: any) {
+        console.log('[IAP]','FinishTxエラー', finishErr?.message || '');
       }
-      return { success: false, error: presentError.message };
+      return { success: true, plan: offering.planKey };
+    } else {
+      return { success: false, error: result?.message || '検証に失敗しました' };
     }
-
-    return { success: true, plan: offering.planKey };
   } catch (error: any) {
+    console.log('[IAP]','Plan購入エラー', `message: ${error?.message}\ncode: ${error?.code}`);
+    // サーバー検証失敗時はfinishTransactionを呼ばない（リトライ可能にする）
+    if (error?.code === 'E_USER_CANCELLED') {
+      return { success: false, cancelled: true };
+    }
     return { success: false, error: error.message || 'プラン購入に失敗しました' };
   }
 }
@@ -305,24 +411,46 @@ export async function purchasePlanSubscription(offering: PlanOffering): Promise<
 // サブスクリプション状態確認
 // ============================
 
-/**
- * 現在のサブスクリプションプランを取得
- */
 export async function getCurrentPlan(): Promise<SubscriptionPlan> {
   if (!isInitialized || !isFirebaseAvailable) return 'free';
 
   try {
-    const result = await apiRequest('/stripeGetCurrentPlan', {});
-    return (result.plan as SubscriptionPlan) || 'free';
+    // Apple側のアクティブなサブスクリプションを確認
+    const purchases = await getAvailablePurchases();
+    let activePlan: SubscriptionPlan = 'free';
+    let activeTransactionId = '';
+    let activeProductId = '';
+
+    for (const p of purchases) {
+      const plan = PRODUCT_TO_PLAN[p.productId];
+      if (plan) {
+        activePlan = plan;
+        activeTransactionId = p.transactionId || '';
+        activeProductId = p.productId;
+        break;
+      }
+    }
+
+    // サーバーにApple側の状態を同期（バックグラウンドで実行）
+    apiRequest('/getCurrentPlan', {
+      applePlan: activePlan,
+      transactionId: activeTransactionId,
+      productId: activeProductId,
+    }).catch(() => {});
+
+    return activePlan;
   } catch (error) {
-    console.error('[Stripe] プラン確認エラー:', error);
-    return 'free';
+    console.error('[IAP] プラン確認エラー:', error);
+    // Apple側の確認に失敗した場合はサーバーのプランをフォールバック
+    try {
+      const result = await apiRequest('/getCurrentPlan', {});
+      return (result.plan as SubscriptionPlan) || 'free';
+    } catch {
+      return 'free';
+    }
   }
 }
 
-/**
- * PurchaseResultからプランを取得
- */
 export function getPlanFromPurchaseResult(result: PurchaseResult): SubscriptionPlan {
   return result.plan || 'free';
 }
@@ -332,55 +460,62 @@ export function getPlanFromPurchaseResult(result: PurchaseResult): SubscriptionP
 // ============================
 
 /**
- * サブスクリプションをキャンセル
+ * サブスクリプションのキャンセル
+ * iOSではアプリ内からキャンセルできないため、設定画面に誘導
  */
 export async function cancelSubscription(): Promise<boolean> {
-  if (!isInitialized || !isFirebaseAvailable) return false;
-
-  try {
-    await apiRequest('/stripeCancelSubscription', {});
-    return true;
-  } catch (error) {
-    console.error('[Stripe] サブスクキャンセルエラー:', error);
-    return false;
-  }
-}
-
-/**
- * Stripe Customer PortalのURLを取得
- */
-export async function getCustomerPortalUrl(): Promise<string | null> {
-  if (!isInitialized || !isFirebaseAvailable) return null;
-
-  try {
-    const result = await apiRequest('/stripeCreatePortalSession', {});
-    return result.url || null;
-  } catch (error) {
-    console.error('[Stripe] ポータルURL取得エラー:', error);
-    return null;
-  }
+  // iOS ではアプリ内から直接解約できない → サブスク管理画面を開く
+  const { Linking } = require('react-native');
+  await Linking.openURL('https://apps.apple.com/account/subscriptions');
+  return true;
 }
 
 // ============================
 // 購入復元
 // ============================
 
-/**
- * 購入を復元する（サーバー側でサブスク状態を確認）
- */
 export async function restorePurchases(): Promise<{
   plan: SubscriptionPlan;
 }> {
-  if (!isInitialized || !isFirebaseAvailable) {
+  if (!isInitialized) {
     return { plan: 'free' };
   }
 
   try {
-    const result = await apiRequest('/stripeRestorePurchases', {});
-    const plan = (result.plan as SubscriptionPlan) || 'free';
-    return { plan };
+    const purchases = await getAvailablePurchases();
+
+    // サーバーで検証（トランザクション情報を送信）
+    const result = await apiRequest('/restoreApplePurchases', {
+      purchases: purchases.map((p) => ({
+        productId: p.productId,
+        transactionId: p.transactionId,
+      })),
+    });
+
+    return { plan: (result.plan as SubscriptionPlan) || 'free' };
   } catch (error) {
-    console.error('[Stripe] 復元エラー:', error);
+    console.error('[IAP] 復元エラー:', error);
     return { plan: 'free' };
   }
+}
+
+// ============================
+// クリーンアップ
+// ============================
+
+export async function cleanupPurchases(): Promise<void> {
+  if (purchaseUpdateSubscription) {
+    purchaseUpdateSubscription.remove();
+    purchaseUpdateSubscription = null;
+  }
+  if (purchaseErrorSubscription) {
+    purchaseErrorSubscription.remove();
+    purchaseErrorSubscription = null;
+  }
+  try {
+    await endConnection();
+  } catch (e) {
+    // ignore
+  }
+  isInitialized = false;
 }

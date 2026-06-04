@@ -31,9 +31,9 @@ export default function CoinShopScreen() {
     useCallback(() => {
       loadCoinData();
       refresh().then(() => loadUsage());
-      // Stripe初期化を待ってからオファリングをロード
+      // IAP初期化を待ってからオファリングをロード
       const checkAndLoad = async () => {
-        // 最大5秒間、Stripe初期化を待つ
+        // 最大5秒間、IAP初期化を待つ
         for (let i = 0; i < 10; i++) {
           if (isPurchasesAvailable()) {
             setIapAvailable(true);
@@ -79,7 +79,7 @@ export default function CoinShopScreen() {
     );
   };
 
-  // 開発用フォールバック削除済み - 本番ではStripe経由のみ
+  // 開発用フォールバック削除済み - 本番ではIAP経由のみ
 
   // OCR枠の購入
   const handleQuotaPurchase = (pkg: OCRQuotaPackage) => {
@@ -161,9 +161,11 @@ export default function CoinShopScreen() {
                     <Text style={styles.packageCoins}>{pkg.coins}</Text>
                   </View>
                   <Text style={styles.packagePrice}>{offering.localizedPrice}</Text>
-                  <Text style={styles.packageUnit}>
-                    (1コイン ¥{(offering.price / pkg.coins).toFixed(1)})
-                  </Text>
+                  {offering.price > 0 && (
+                    <Text style={styles.packageUnit}>
+                      (1コイン {offering.currencyCode === 'JPY' ? '¥' : '$'}{(offering.price / pkg.coins).toFixed(1)})
+                    </Text>
+                  )}
                 </TouchableOpacity>
               );
             })

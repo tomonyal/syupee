@@ -76,13 +76,7 @@ export interface User {
   ocrQuotaBalance: number;
   chatQuotaBalance: number;
   planResetDate: string;
-  initialCoinStatus?: InitialCoinStatus;
-  initialCoinCouponCode?: string;
-  deviceId?: string;
 }
-
-// 初回コインステータス
-export type InitialCoinStatus = 'none' | 'requested' | 'issued' | 'redeemed';
 
 // サブスクリプションプラン
 export type SubscriptionPlan = 'free' | 'light' | 'standard' | 'premium';
@@ -235,5 +229,4 @@ export type RootStackParamList = {
   RankDetail: undefined;
   Terms: undefined;
   Privacy: undefined;
-  CouponRedeem: undefined;
 };

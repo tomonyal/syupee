@@ -1,48 +1,34 @@
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
-import Stripe from 'stripe';
 import cors from 'cors';
 import { onDocumentUpdated } from 'firebase-functions/v2/firestore';
+import { onRequest } from 'firebase-functions/v2/https';
+import { defineSecret } from 'firebase-functions/params';
 
 admin.initializeApp();
-
-// ============================
-// Stripe初期化（遅延）
-// ============================
-let _stripe: Stripe | null = null;
-
-function getStripe(): Stripe {
-  if (!_stripe) {
-    const key = process.env.STRIPE_SECRET_KEY;
-    if (!key) {
-      throw new Error('STRIPE_SECRET_KEY is not set');
-    }
-    _stripe = new Stripe(key, {
-      apiVersion: '2025-02-24.acacia',
-    });
-  }
-  return _stripe;
-}
 
 const corsHandler = cors({ origin: true });
 
 // ============================
-// コインパッケージ定義（クライアントと一致させる）
+// Apple IAP Product → コインマッピング
 // ============================
-const COIN_PACKAGES: Record<string, { coins: number; price: number; label: string; priceId: string }> = {
-  coin_50: { coins: 50, price: 120, label: 'otameshi', priceId: 'price_1TIfAVKg4AmrK7u5zRiSDp5U' },
-  coin_100: { coins: 100, price: 200, label: 'otoku', priceId: 'price_1TIfAXKg4AmrK7u5QP4UhlRU' },
-  coin_300: { coins: 300, price: 500, label: 'tappuri', priceId: 'price_1TIfAXKg4AmrK7u5yboMuEVD' },
-  coin_500: { coins: 500, price: 700, label: 'mega', priceId: 'price_1TIfAVKg4AmrK7u5JrJ1M14N' },
-  coin_1000: { coins: 1000, price: 1200, label: 'premium', priceId: 'price_1TIfATKg4AmrK7u547JR6bNN' },
+const COIN_PRODUCTS: Record<string, { coins: number; label: string }> = {
+  'com.syupee.coin.100': { coins: 100, label: 'おためし' },
+  'com.syupee.coin.300': { coins: 300, label: 'お得パック' },
+  'com.syupee.coin.500': { coins: 500, label: 'たっぷりパック' },
+  'com.syupee.coin.1000': { coins: 1000, label: 'プレミアムパック' },
 };
 
-// プラン定義
-const PLANS: Record<string, { label: string; price: number; priceId: string }> = {
-  light: { label: 'Light', price: 300, priceId: 'price_1TIfATKg4AmrK7u5aCWTB0KN' },
-  standard: { label: 'Standard', price: 600, priceId: 'price_1TIfAUKg4AmrK7u5q7exGdbq' },
-  premium: { label: 'Premium', price: 1200, priceId: 'price_1TIfAXKg4AmrK7u5h9wEYXh2' },
+// Apple IAP Product → プランマッピング
+const PLAN_PRODUCTS: Record<string, string> = {
+  'com.syupee.sub.light': 'light',
+  'com.syupee.sub.standard': 'standard',
+  'com.syupee.sub.premium': 'premium',
 };
+
+// Apple App Store サーバーURL
+const APPLE_VERIFY_URL = 'https://buy.itunes.apple.com/verifyReceipt';
+const APPLE_SANDBOX_URL = 'https://sandbox.itunes.apple.com/verifyReceipt';
 
 // ============================
 // 認証ミドルウェア
@@ -56,243 +42,163 @@ async function verifyAuth(req: functions.https.Request): Promise<admin.auth.Deco
   return admin.auth().verifyIdToken(token);
 }
 
-// Firestoreからユーザーの stripeCustomerId を取得/設定するヘルパー
-async function getOrCreateStripeCustomer(
-  userId: string,
-  email?: string,
-  displayName?: string
-): Promise<string> {
-  const userDoc = await admin.firestore().doc(`users/${userId}`).get();
-  const data = userDoc.data();
+const appleSharedSecret = defineSecret('APPLE_SHARED_SECRET');
 
-  if (data?.stripeCustomerId) {
-    return data.stripeCustomerId;
-  }
+// ============================
+// Apple レシート検証ヘルパー
+// ============================
+async function verifyAppleReceipt(receiptData: string): Promise<any> {
+  const sharedSecret = appleSharedSecret.value();
 
-  const customer = await getStripe().customers.create({
-    email: email || undefined,
-    name: displayName || undefined,
-    metadata: { firebaseUID: userId },
+  const body = JSON.stringify({
+    'receipt-data': receiptData,
+    password: sharedSecret,
+    'exclude-old-transactions': true,
   });
 
-  await admin.firestore().doc(`users/${userId}`).set(
-    { stripeCustomerId: customer.id },
-    { merge: true }
-  );
+  // まず本番サーバーで検証
+  let response = await fetch(APPLE_VERIFY_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+  });
+  let result = await response.json();
 
-  return customer.id;
+  // status 21007 = sandbox receipt → sandboxサーバーで再検証
+  if (result.status === 21007) {
+    response = await fetch(APPLE_SANDBOX_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    });
+    result = await response.json();
+  }
+
+  return result;
 }
 
 // ============================
-// 1. Stripe Customer作成/取得
+// 1. Apple 購入検証 & 付与 (StoreKit 2 transactionId ベース)
 // ============================
-export const stripeCreateOrGetCustomer = functions.https.onRequest((req, res) => {
-  corsHandler(req, res, async () => {
+export const validateAppleReceipt = onRequest({ cors: true }, async (req, res) => {
     try {
       const decoded = await verifyAuth(req);
-      const customerId = await getOrCreateStripeCustomer(
-        decoded.uid,
-        decoded.email,
-        decoded.name
-      );
-      res.json({ customerId });
-    } catch (error: any) {
-      console.error('createOrGetCustomer error:', error);
-      res.status(error.code === 'unauthenticated' ? 401 : 500).json({
-        message: error.message || 'Customer creation failed',
-      });
-    }
-  });
-});
+      const userId = decoded.uid;
+      const { transactionId, productId, packageId, planKey, type } = req.body;
 
-// ============================
-// 2. 商品一覧取得
-// ============================
-export const stripeGetProducts = functions.https.onRequest((req, res) => {
-  corsHandler(req, res, async () => {
-    try {
-      await verifyAuth(req);
-
-      const coinProducts = Object.entries(COIN_PACKAGES).map(([id, pkg]) => ({
-        packageId: id,
-        priceId: pkg.priceId,
-        localizedPrice: `\u00a5${pkg.price}`,
-        price: pkg.price,
-        currencyCode: 'JPY',
-        label: pkg.label,
-        coins: pkg.coins,
-      }));
-
-      const planProducts = Object.entries(PLANS).map(([key, plan]) => ({
-        planKey: key,
-        priceId: plan.priceId,
-        localizedPrice: `\u00a5${plan.price}`,
-        price: plan.price,
-        currencyCode: 'JPY',
-        label: plan.label,
-      }));
-
-      res.json({ coinProducts, planProducts });
-    } catch (error: any) {
-      console.error('getProducts error:', error);
-      res.status(500).json({ message: error.message || 'Failed to get products' });
-    }
-  });
-});
-
-// ============================
-// 3. コイン購入 PaymentIntent作成
-// ============================
-export const stripeCreateCoinPaymentIntent = functions.https.onRequest((req, res) => {
-  corsHandler(req, res, async () => {
-    try {
-      const decoded = await verifyAuth(req);
-      const { packageId } = req.body;
-
-      const coinPkg = COIN_PACKAGES[packageId];
-      if (!coinPkg) {
-        res.status(400).json({ message: 'Invalid package ID' });
+      if (!transactionId || !productId) {
+        res.status(400).json({ success: false, message: 'Missing transactionId or productId' });
         return;
       }
 
-      const customerId = await getOrCreateStripeCustomer(decoded.uid, decoded.email);
+      if (type === 'coin') {
+        // コイン購入の処理
+        const coinProduct = COIN_PRODUCTS[productId];
+        if (!coinProduct) {
+          res.status(400).json({ success: false, message: 'Invalid product ID' });
+          return;
+        }
 
-      const ephemeralKey = await getStripe().ephemeralKeys.create(
-        { customer: customerId },
-        { apiVersion: '2025-02-24.acacia' }
-      );
+        // 重複付与防止: transactionId で確認
+        const existingTx = await admin.firestore()
+          .collection(`users/${userId}/coinTransactions`)
+          .where('appleTransactionId', '==', transactionId)
+          .limit(1)
+          .get();
 
-      const paymentIntent = await getStripe().paymentIntents.create({
-        amount: coinPkg.price,
-        currency: 'jpy',
-        customer: customerId,
-        metadata: {
-          type: 'coin_purchase',
-          packageId,
-          coins: String(coinPkg.coins),
-          userId: decoded.uid,
-        },
-        automatic_payment_methods: { enabled: true },
-      });
+        if (!existingTx.empty) {
+          // 既に付与済み
+          res.json({ success: true, message: 'Already processed' });
+          return;
+        }
 
-      res.json({
-        paymentIntent: paymentIntent.client_secret,
-        ephemeralKey: ephemeralKey.secret,
-        customer: customerId,
-      });
-    } catch (error: any) {
-      console.error('createCoinPaymentIntent error:', error);
-      res.status(500).json({ message: error.message || 'PaymentIntent creation failed' });
-    }
-  });
-});
+        // コイン付与
+        await admin.firestore().collection(`users/${userId}/coinTransactions`).add({
+          type: 'purchase',
+          amount: coinProduct.coins,
+          description: `コイン購入 (${coinProduct.label})`,
+          appleTransactionId: transactionId,
+          productId,
+          createdAt: new Date().toISOString(),
+        });
 
-// ============================
-// 4. サブスクリプション作成
-// ============================
-export const stripeCreateSubscription = functions.https.onRequest((req, res) => {
-  corsHandler(req, res, async () => {
-    try {
-      const decoded = await verifyAuth(req);
-      const { priceId, planKey } = req.body;
-
-      if (!PLANS[planKey]) {
-        res.status(400).json({ message: 'Invalid plan' });
-        return;
-      }
-
-      const customerId = await getOrCreateStripeCustomer(decoded.uid, decoded.email);
-
-      // 既存のサブスクリプションがあればキャンセル
-      const existingSubs = await getStripe().subscriptions.list({
-        customer: customerId,
-        status: 'active',
-      });
-
-      for (const sub of existingSubs.data) {
-        await getStripe().subscriptions.cancel(sub.id);
-      }
-
-      // 新しいサブスクリプション作成
-      const subscription = await getStripe().subscriptions.create({
-        customer: customerId,
-        items: [{ price: priceId }],
-        payment_behavior: 'default_incomplete',
-        payment_settings: {
-          save_default_payment_method: 'on_subscription',
-        },
-        expand: ['latest_invoice.payment_intent'],
-        metadata: {
-          planKey,
-          userId: decoded.uid,
-        },
-      });
-
-      const invoice = subscription.latest_invoice as Stripe.Invoice;
-      const pi = invoice.payment_intent as Stripe.PaymentIntent;
-
-      if (!pi || !pi.client_secret) {
-        // サブスクリプションが即時アクティブ（無料プラン等）の場合
-        const ephemeralKey = await getStripe().ephemeralKeys.create(
-          { customer: customerId },
-          { apiVersion: '2025-02-24.acacia' }
-        );
-        // プランをFirestoreに直接設定
-        await admin.firestore().doc(`users/${decoded.uid}`).set(
-          { plan: planKey, stripeSubscriptionId: subscription.id },
+        await admin.firestore().doc(`users/${userId}`).set(
+          { coinBalance: admin.firestore.FieldValue.increment(coinProduct.coins) },
           { merge: true }
         );
-        res.json({
-          paymentIntent: null,
-          ephemeralKey: ephemeralKey.secret,
-          customer: customerId,
-          subscriptionId: subscription.id,
-          activated: true,
-        });
-        return;
+
+        console.log(`Coins granted: userId=${userId}, coins=${coinProduct.coins}, txId=${transactionId}`);
+        res.json({ success: true, coins: coinProduct.coins });
+
+      } else if (type === 'subscription') {
+        // サブスクリプションの処理
+        const plan = PLAN_PRODUCTS[productId] || planKey;
+        if (!plan || plan === 'free') {
+          res.status(400).json({ success: false, message: 'Invalid plan' });
+          return;
+        }
+
+        await admin.firestore().doc(`users/${userId}`).set(
+          {
+            plan,
+            appleOriginalTransactionId: transactionId,
+          },
+          { merge: true }
+        );
+        console.log(`Plan activated: userId=${userId}, plan=${plan}, txId=${transactionId}`);
+        res.json({ success: true, plan });
+
+      } else {
+        res.status(400).json({ success: false, message: 'Invalid purchase type' });
       }
-
-      const ephemeralKey = await getStripe().ephemeralKeys.create(
-        { customer: customerId },
-        { apiVersion: '2025-02-24.acacia' }
-      );
-
-      res.json({
-        paymentIntent: pi.client_secret,
-        ephemeralKey: ephemeralKey.secret,
-        customer: customerId,
-        subscriptionId: subscription.id,
-      });
     } catch (error: any) {
-      console.error('createSubscription error:', error);
-      res.status(500).json({ message: error.message || 'Subscription creation failed' });
+      console.error('validateAppleReceipt error:', error);
+      res.status(500).json({ success: false, message: error.message || 'Validation failed' });
     }
-  });
 });
 
 // ============================
-// 5. 現在のプラン取得
+// 2. 現在のプラン取得 & Apple側サブスク状態の同期
 // ============================
-export const stripeGetCurrentPlan = functions.https.onRequest((req, res) => {
+export const getCurrentPlan = functions.https.onRequest((req, res) => {
   corsHandler(req, res, async () => {
     try {
       const decoded = await verifyAuth(req);
-      const customerId = await getOrCreateStripeCustomer(decoded.uid, decoded.email);
+      const userId = decoded.uid;
+      const { applePlan, transactionId, productId } = req.body || {};
 
-      const subscriptions = await getStripe().subscriptions.list({
-        customer: customerId,
-        status: 'active',
-        expand: ['data.items.data.price'],
-      });
+      const userDoc = await admin.firestore().doc(`users/${userId}`).get();
+      const data = userDoc.data();
+      let plan = data?.plan || 'free';
 
-      if (subscriptions.data.length === 0) {
-        res.json({ plan: 'free' });
-        return;
+      // クライアントからApple側のサブスク状態が送られた場合、同期する
+      if (applePlan !== undefined) {
+        const validPlans = ['free', 'light', 'standard', 'premium'];
+        if (validPlans.includes(applePlan)) {
+          if (applePlan !== 'free' && applePlan !== plan) {
+            // Apple側にアクティブなサブスクがある → プランを更新
+            await admin.firestore().doc(`users/${userId}`).set(
+              {
+                plan: applePlan,
+                appleOriginalTransactionId: transactionId || '',
+              },
+              { merge: true }
+            );
+            plan = applePlan;
+            console.log(`[Subscription] Synced plan from Apple: userId=${userId}, plan=${plan}`);
+          } else if (applePlan === 'free' && plan !== 'free') {
+            // Apple側にサブスクがない → freeにダウングレード
+            await admin.firestore().doc(`users/${userId}`).set(
+              { plan: 'free' },
+              { merge: true }
+            );
+            plan = 'free';
+            console.log(`[Subscription] Downgraded (no Apple sub): userId=${userId}`);
+          }
+        }
       }
 
-      const latestSub = subscriptions.data[0];
-      const planKey = latestSub.metadata.planKey || 'free';
-      res.json({ plan: planKey });
+      res.json({ plan });
     } catch (error: any) {
       console.error('getCurrentPlan error:', error);
       res.status(500).json({ message: error.message || 'Failed to get plan' });
@@ -301,280 +207,56 @@ export const stripeGetCurrentPlan = functions.https.onRequest((req, res) => {
 });
 
 // ============================
-// 6. 購入復元
+// 3. 購入復元
 // ============================
-export const stripeRestorePurchases = functions.https.onRequest((req, res) => {
-  corsHandler(req, res, async () => {
-    try {
-      const decoded = await verifyAuth(req);
-      const customerId = await getOrCreateStripeCustomer(decoded.uid, decoded.email);
-
-      const subscriptions = await getStripe().subscriptions.list({
-        customer: customerId,
-        status: 'active',
-      });
-
-      if (subscriptions.data.length === 0) {
-        res.json({ plan: 'free' });
-        return;
-      }
-
-      const planKey = subscriptions.data[0].metadata.planKey || 'free';
-
-      await admin.firestore().doc(`users/${decoded.uid}`).set(
-        { plan: planKey },
-        { merge: true }
-      );
-
-      res.json({ plan: planKey });
-    } catch (error: any) {
-      console.error('restorePurchases error:', error);
-      res.status(500).json({ message: error.message || 'Restore failed' });
-    }
-  });
-});
-
-// ============================
-// 7. サブスクリプションキャンセル
-// ============================
-export const stripeCancelSubscription = functions.https.onRequest((req, res) => {
-  corsHandler(req, res, async () => {
-    try {
-      const decoded = await verifyAuth(req);
-      const customerId = await getOrCreateStripeCustomer(decoded.uid, decoded.email);
-
-      const subscriptions = await getStripe().subscriptions.list({
-        customer: customerId,
-        status: 'active',
-      });
-
-      for (const sub of subscriptions.data) {
-        await getStripe().subscriptions.cancel(sub.id);
-      }
-
-      await admin.firestore().doc(`users/${decoded.uid}`).set(
-        { plan: 'free' },
-        { merge: true }
-      );
-
-      res.json({ success: true });
-    } catch (error: any) {
-      console.error('cancelSubscription error:', error);
-      res.status(500).json({ message: error.message || 'Cancel failed' });
-    }
-  });
-});
-
-// ============================
-// 8. Customer Portal セッション作成
-// ============================
-export const stripeCreatePortalSession = functions.https.onRequest((req, res) => {
-  corsHandler(req, res, async () => {
-    try {
-      const decoded = await verifyAuth(req);
-      const customerId = await getOrCreateStripeCustomer(decoded.uid, decoded.email);
-
-      const session = await getStripe().billingPortal.sessions.create({
-        customer: customerId,
-        return_url: req.body.returnUrl || 'https://syupee-ebfaa.web.app',
-      });
-
-      res.json({ url: session.url });
-    } catch (error: any) {
-      console.error('createPortalSession error:', error);
-      res.status(500).json({ message: error.message || 'Portal session creation failed' });
-    }
-  });
-});
-
-// ============================
-// 9. Webhook（Stripeからのイベント受信）
-// ============================
-export const stripeWebhook = functions.https.onRequest(async (req, res) => {
-  const sig = req.headers['stripe-signature'] as string;
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || '';
-
-  let event: Stripe.Event;
-  try {
-    event = getStripe().webhooks.constructEvent(req.rawBody, sig, webhookSecret);
-  } catch (err: any) {
-    console.error('Webhook signature verification failed:', err.message);
-    res.status(400).send(`Webhook Error: ${err.message}`);
-    return;
-  }
-
-  try {
-    switch (event.type) {
-      case 'payment_intent.succeeded': {
-        const pi = event.data.object as Stripe.PaymentIntent;
-        if (pi.metadata.type === 'coin_purchase') {
-          const userId = pi.metadata.userId;
-          const coins = parseInt(pi.metadata.coins || '0', 10);
-          const packageId = pi.metadata.packageId;
-
-          if (userId && coins > 0) {
-            await admin.firestore().collection(`users/${userId}/coinTransactions`).add({
-              type: 'purchase',
-              amount: coins,
-              description: `Coin purchase (${packageId})`,
-              paymentIntentId: pi.id,
-              createdAt: admin.firestore.FieldValue.serverTimestamp(),
-            });
-
-            await admin.firestore().doc(`users/${userId}`).set(
-              {
-                coinBalance: admin.firestore.FieldValue.increment(coins),
-              },
-              { merge: true }
-            );
-
-            console.log(`Coins granted: userId=${userId}, coins=${coins}`);
-          }
-        }
-        break;
-      }
-
-      case 'customer.subscription.created':
-      case 'customer.subscription.updated': {
-        const sub = event.data.object as Stripe.Subscription;
-        const userId = sub.metadata.userId;
-        const planKey = sub.metadata.planKey;
-
-        if (userId && planKey && sub.status === 'active') {
-          await admin.firestore().doc(`users/${userId}`).set(
-            { plan: planKey, stripeSubscriptionId: sub.id },
-            { merge: true }
-          );
-          console.log(`Plan updated: userId=${userId}, plan=${planKey}`);
-        }
-        break;
-      }
-
-      case 'customer.subscription.deleted': {
-        const sub = event.data.object as Stripe.Subscription;
-        const userId = sub.metadata.userId;
-
-        if (userId) {
-          await admin.firestore().doc(`users/${userId}`).set(
-            { plan: 'free', stripeSubscriptionId: null },
-            { merge: true }
-          );
-          console.log(`Plan cancelled: userId=${userId} -> free`);
-        }
-        break;
-      }
-
-      case 'invoice.payment_failed': {
-        const invoice = event.data.object as Stripe.Invoice;
-        const customerId = invoice.customer as string;
-
-        const userSnapshot = await admin.firestore()
-          .collection('users')
-          .where('stripeCustomerId', '==', customerId)
-          .limit(1)
-          .get();
-
-        if (!userSnapshot.empty) {
-          const userId = userSnapshot.docs[0].id;
-          console.warn(`Payment failed: userId=${userId}, invoiceId=${invoice.id}`);
-        }
-        break;
-      }
-
-      default:
-        console.log(`Unhandled event: ${event.type}`);
-    }
-
-    res.json({ received: true });
-  } catch (error) {
-    console.error('Webhook processing error:', error);
-    res.status(500).json({ error: 'Webhook processing failed' });
-  }
-});
-
-// ============================
-// クーポンコード引き換え
-// ============================
-export const redeemCoupon = functions.https.onRequest((req, res) => {
-  corsHandler(req, res, async () => {
+export const restoreApplePurchases = onRequest({ cors: true }, async (req, res) => {
     try {
       const decoded = await verifyAuth(req);
       const userId = decoded.uid;
-      const { code } = req.body;
+      const { purchases } = req.body;
 
-      if (!code || typeof code !== 'string' || code.trim().length === 0) {
-        res.status(400).json({ error: 'クーポンコードを入力してください' });
-        return;
+      let activePlan: string = 'free';
+      let latestTransactionId: string = '';
+
+      if (purchases && Array.isArray(purchases)) {
+        // 複数サブスクがある場合、transactionIdが最大（最新）のものを採用
+        let latestTxNum = 0;
+        for (const purchase of purchases) {
+          const plan = PLAN_PRODUCTS[purchase.productId];
+          if (plan) {
+            const txNum = parseInt(purchase.transactionId || '0', 10) || 0;
+            if (txNum >= latestTxNum) {
+              latestTxNum = txNum;
+              activePlan = plan;
+              latestTransactionId = purchase.transactionId || '';
+            }
+          }
+        }
+
+        if (activePlan !== 'free') {
+          await admin.firestore().doc(`users/${userId}`).set(
+            {
+              plan: activePlan,
+              appleOriginalTransactionId: latestTransactionId,
+            },
+            { merge: true }
+          );
+        }
       }
 
-      const couponCode = code.trim().toUpperCase();
-      const couponRef = admin.firestore().doc(`coupons/${couponCode}`);
+      if (activePlan === 'free') {
+        await admin.firestore().doc(`users/${userId}`).set(
+          { plan: 'free' },
+          { merge: true }
+        );
+      }
 
-      // トランザクションでアトミックに処理
-      const result = await admin.firestore().runTransaction(async (tx) => {
-        const couponSnap = await tx.get(couponRef);
-        const userRef = admin.firestore().doc(`users/${userId}`);
-        const userSnap = await tx.get(userRef);
-
-        if (!couponSnap.exists) {
-          throw new Error('無効なクーポンコードです');
-        }
-
-        const couponData = couponSnap.data()!;
-
-        if (couponData.used) {
-          throw new Error('このクーポンコードは使用済みです');
-        }
-
-        const coinAmount = couponData.coinAmount as number;
-        if (!coinAmount || coinAmount <= 0) {
-          throw new Error('無効なクーポンです');
-        }
-
-        // クーポンを使用済みにする
-        tx.update(couponRef, {
-          used: true,
-          usedBy: userId,
-          usedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-
-        // ユーザーのコイン残高を増やす
-        const userUpdate: Record<string, any> = {
-          coinBalance: admin.firestore.FieldValue.increment(coinAmount),
-        };
-
-        // 初回コインクーポンの場合は適用済みに更新
-        const userData = userSnap.data();
-        if (userData?.initialCoinCouponCode === couponCode) {
-          userUpdate.initialCoinStatus = 'redeemed';
-        }
-
-        tx.update(userRef, userUpdate);
-
-        // コイン取引履歴に記録
-        const txRef = admin.firestore().collection(`users/${userId}/coinTransactions`).doc();
-        tx.set(txRef, {
-          type: 'bonus',
-          amount: coinAmount,
-          description: `クーポン: ${couponCode}`,
-          createdAt: new Date().toISOString(),
-        });
-
-        return { coinAmount, code: couponCode };
-      });
-
-      res.json({
-        success: true,
-        coinAmount: result.coinAmount,
-        message: `${result.coinAmount}コインを獲得しました！`,
-      });
+      res.json({ plan: activePlan });
     } catch (error: any) {
-      console.error('redeemCoupon error:', error);
-      const message = error.message || 'クーポンの引き換えに失敗しました';
-      res.status(400).json({ error: message });
+      console.error('restoreApplePurchases error:', error);
+      res.status(500).json({ message: error.message || 'Restore failed' });
     }
   });
-});
 
 // ============================
 // 不正利用検知（Firestore トリガー）
@@ -651,3 +333,68 @@ export const detectAbuseOnUserUpdate = onDocumentUpdated(
     }
   }
 );
+
+// ============================
+// 月次リセット（Admin SDKでルール無視して更新）
+// ============================
+export const resetMonthlyUsageIfNeeded = onRequest({ cors: true }, async (req, res) => {
+  corsHandler(req, res, async () => {
+    try {
+      const decoded = await verifyAuth(req);
+      const userId = decoded.uid;
+
+      const userRef = admin.firestore().collection('users').doc(userId);
+      const userSnap = await userRef.get();
+
+      if (!userSnap.exists) {
+        res.status(404).json({ success: false, message: 'User not found' });
+        return;
+      }
+
+      const userData = userSnap.data();
+      const planResetDate = userData?.planResetDate;
+
+      if (!planResetDate) {
+        // planResetDateがない場合は設定して終了
+        await userRef.set({ planResetDate: new Date().toISOString() }, { merge: true });
+        res.json({ success: true, reset: false, message: 'planResetDate initialized' });
+        return;
+      }
+
+      // 月が変わったかチェック
+      const resetDate = new Date(planResetDate);
+      const now = new Date();
+      const isMonthChanged =
+        resetDate.getFullYear() !== now.getFullYear() ||
+        resetDate.getMonth() !== now.getMonth();
+
+      if (!isMonthChanged) {
+        res.json({ success: true, reset: false, message: 'No reset needed' });
+        return;
+      }
+
+      // 月次リセット実行（Admin SDKで直接更新、Firestoreルールを無視）
+      await userRef.set(
+        {
+          ocrUsedThisMonth: 0,
+          chatUsedThisMonth: 0,
+          planResetDate: now.toISOString(),
+          // ocrQuotaBalance, chatQuotaBalance は繰り越し（更新しない）
+        },
+        { merge: true }
+      );
+
+      console.log(`[MonthlyReset] userId=${userId} reset from ${planResetDate} to ${now.toISOString()}`);
+
+      res.json({
+        success: true,
+        reset: true,
+        message: 'Monthly usage reset successfully',
+        newResetDate: now.toISOString(),
+      });
+    } catch (error: any) {
+      console.error('resetMonthlyUsageIfNeeded error:', error);
+      res.status(500).json({ success: false, message: error.message || 'Reset failed' });
+    }
+  });
+});
